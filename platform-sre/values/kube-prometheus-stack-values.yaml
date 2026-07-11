@@ -61,10 +61,42 @@ prometheus:
 # ---- Alertmanager ----
 alertmanager:
   enabled: true
-  # TODO étape 10 : votre configuration Alertmanager (routes, receivers).
-  # Tant que vide, le sous-chart utilise une config par défaut qui ne route
-  # nulle part.
-  config: {}
+  # Étape 10 : route severity:page vers un webhook primaire (réveille),
+  # severity:ticket vers un webhook secondaire différent (attend lundi).
+  # Webhooks mockés localement (platform-sre/alerting/webhook-mock.yaml) —
+  # équivalent de webhook.site, sans dépendance à un compte externe.
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: default-null
+      group_by: ["alertname", "service"]
+      group_wait: 30s
+      group_interval: 5m
+      # Piège du poly (Annexe B) : sans repeat_interval, une alerte qui
+      # reste firing est resignalée toutes les 4h par défaut — mauvais
+      # réglage pour du "page" (trop rare) comme pour du "ticket" (spam si
+      # trop court). Différencié explicitement par route ci-dessous.
+      repeat_interval: 4h
+      routes:
+        - matchers:
+            - severity = "page"
+          receiver: primary-webhook
+          repeat_interval: 1h
+        - matchers:
+            - severity = "ticket"
+          receiver: secondary-webhook
+          repeat_interval: 12h
+    receivers:
+      - name: default-null
+      - name: primary-webhook
+        webhook_configs:
+          - url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
+            send_resolved: true
+      - name: secondary-webhook
+        webhook_configs:
+          - url: http://webhook-mock.monitoring.svc.cluster.local:8080/secondary
+            send_resolved: true
 
 # ---- Sous-charts à désactiver sur kind ----
 # Kind ne fournit pas les endpoints standards de la control plane.

@@ -1,0 +1,70 @@
+# PrometheusRule — étape 10. Deux familles d'alertes, gradées par sévérité :
+#   - page   : réveille à 3h du matin (dégradation en cours, agir maintenant).
+#   - ticket : peut attendre lundi (dégradation lente, pas d'urgence).
+#
+# Portées sur les 3 services (namespace devhub-dev), label `release: kps`
+# requis pour matcher prometheusSpec.ruleSelector (kube-prometheus-stack-values.yaml).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: devhub-services-alerts
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: devhub-services.error-rate
+      rules:
+        - alert: HighErrorRate
+          # for:5m — une fluctuation transitoire de PromQL ne doit pas
+          # déclencher ; il faut 5 minutes de dégradation soutenue (piège
+          # explicitement cité par le poly, Annexe B).
+          expr: |
+            100 * sum(rate(http_requests_total{namespace="devhub-dev", status_class="5xx"}[5m])) by (service)
+            /
+            sum(rate(http_requests_total{namespace="devhub-dev"}[5m])) by (service)
+            > 1
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "Taux d'erreur > 1% sur {{ $labels.service }}"
+            description: "{{ $labels.service }} : {{ printf \"%.2f\" $value }}% de requêtes en erreur (5xx) sur les 5 dernières minutes. Error budget mensuel en cours d'érosion — cf. RAPPORT.md étape 1."
+
+    - name: devhub-services.latency
+      rules:
+        # Seuils = SLO p95 de l'étape 1 (300/400/200ms). Une seule requête
+        # lente ne veut rien dire ; 30 minutes de p95 dégradé est le signal
+        # qui justifie d'attendre lundi plutôt que de réveiller quelqu'un.
+        - alert: LatencyDegraded
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="devhub-dev", service="annuaire"}[5m])) by (le)) > 0.3
+          for: 30m
+          labels:
+            severity: ticket
+            service: annuaire
+          annotations:
+            summary: "Latence p95 dégradée sur annuaire"
+            description: "p95 > 300ms (SLO étape 1) sur annuaire depuis 30 minutes."
+
+        - alert: LatencyDegraded
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="devhub-dev", service="planning"}[5m])) by (le)) > 0.4
+          for: 30m
+          labels:
+            severity: ticket
+            service: planning
+          annotations:
+            summary: "Latence p95 dégradée sur planning"
+            description: "p95 > 400ms (SLO étape 1) sur planning depuis 30 minutes."
+
+        - alert: LatencyDegraded
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="devhub-dev", service="notif"}[5m])) by (le)) > 0.2
+          for: 30m
+          labels:
+            severity: ticket
+            service: notif
+          annotations:
+            summary: "Latence p95 dégradée sur notif"
+            description: "p95 > 200ms (SLO étape 1) sur notif depuis 30 minutes."

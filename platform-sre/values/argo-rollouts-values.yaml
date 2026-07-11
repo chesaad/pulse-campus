@@ -15,14 +15,51 @@ dashboard:
       - /
     pathType: Prefix
 
-# Active le service de notifications utilisé en étape 10.
+# Active le service de notifications utilisé en étape 10. Chaque rollout
+# terminé notifie : succès -> webhook "rollout-success" (3e webhook dédié),
+# échec/abort -> webhook "primary" (même destination que les alertes
+# Prometheus severity:page — un abort de rollout mérite la même urgence
+# qu'une dégradation qui réveille à 3h du matin).
 notifications:
-  notifiers: {}
-  # TODO étape 10 : configurez ici les webhooks (succès, échec).
-  # secret:
-  #   create: true
-  # configmap:
-  #   create: true
+  notifiers:
+    service.webhook: |
+      primary:
+        url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
+      rollout-success:
+        url: http://webhook-mock.monitoring.svc.cluster.local:8080/rollout-success
+  templates:
+    template.rollout-completed: |
+      message: |
+        Rollout {{.rollout.metadata.name}} (ns {{.rollout.metadata.namespace}}) : {{.rollout.status.phase}}. Image active : {{(index .rollout.spec.template.spec.containers 0).image}}.
+      webhook:
+        rollout-success:
+          method: POST
+          body: |
+            {"rollout":"{{.rollout.metadata.name}}","namespace":"{{.rollout.metadata.namespace}}","phase":"{{.rollout.status.phase}}","image":"{{(index .rollout.spec.template.spec.containers 0).image}}"}
+    template.rollout-aborted: |
+      message: |
+        Rollout {{.rollout.metadata.name}} (ns {{.rollout.metadata.namespace}}) ABORTED — retour à la version stable. Image : {{(index .rollout.spec.template.spec.containers 0).image}}.
+      webhook:
+        primary:
+          method: POST
+          body: |
+            {"rollout":"{{.rollout.metadata.name}}","namespace":"{{.rollout.metadata.namespace}}","phase":"{{.rollout.status.phase}}","event":"aborted"}
+  triggers:
+    trigger.on-rollout-completed: |
+      - when: rollout.status.phase == 'Healthy'
+        send: [rollout-completed]
+    trigger.on-rollout-aborted: |
+      - when: rollout.status.phase == 'Degraded'
+        send: [rollout-aborted]
+  subscriptions:
+    - recipients:
+        - webhook:rollout-success
+      triggers:
+        - on-rollout-completed
+    - recipients:
+        - webhook:primary
+      triggers:
+        - on-rollout-aborted
 
 # En kind, gardez les ressources légères.
 controller:

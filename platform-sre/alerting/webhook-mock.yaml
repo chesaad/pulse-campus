@@ -1,0 +1,48 @@
+# Récepteurs de webhooks mockés (étape 10) — équivalent local de webhook.site,
+# nécessaire car ce TP tourne sur un cluster kind sans accès à un vrai service
+# externe pour la démonstration. Chaque payload reçu est loggé sur stdout
+# (kubectl logs), consultable comme preuve de réception.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-mock
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: webhook-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webhook-mock
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webhook-mock
+    spec:
+      containers:
+        - name: echo
+          image: mendhak/http-https-echo:31
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HTTP_PORT
+              value: "8080"
+            - name: LOG_IGNORE_PATH
+              value: "/healthz"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-mock
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: webhook-mock
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: webhook-mock

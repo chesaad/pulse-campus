@@ -1,0 +1,30 @@
+# Application ArgoCD : alerting (étape 10 du poly)
+#
+# Déploie les PrometheusRule (error rate, latence) — ressources brutes,
+# pas de chart Helm nécessaire pour 2 manifestes.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alerting
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devhub
+
+  source:
+    repoURL: https://github.com/chesaad/pulse-campus.git
+    targetRevision: main
+    path: platform-sre/alerting
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
