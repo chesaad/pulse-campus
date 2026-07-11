@@ -2,7 +2,7 @@
 # Ne mettez ICI que ce qui diffère de values.yaml.
 
 image:
-  tag: demo-bluegreen1
+  tag: demo-bluegreen2
 
 ingress:
   enabled: true
