@@ -6,7 +6,7 @@
 # automatisé changerait pour déclencher un déploiement (poly, "La promesse de
 # cette chaîne", étape 1).
 image:
-  tag: demo-scenario1
+  tag: demo-scenario3
 
 ingress:
   enabled: true
