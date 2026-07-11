@@ -69,10 +69,18 @@ spec:
     blueGreen:
       activeService: {{ include "planning.fullname" . }}
       previewService: {{ include "planning.fullname" . }}-preview
-      # Bascule manuelle pour la première démonstration (étape 8) : aucune
-      # promotion automatique tant qu'on ne l'a pas explicitement validée
-      # via `kubectl argo rollouts promote`.
-      autoPromotionEnabled: false
+      # Bascule automatisée (étape 8, 2e démonstration) : gatée par
+      # prePromotionAnalysis, pas par un bouton manuel. autoPromotionEnabled
+      # laissé à true (défaut) — c'est prePromotionAnalysis qui bloque la
+      # bascule tant que la preview n'a pas prouvé sa santé pendant 2 min.
+      autoPromotionEnabled: true
+      prePromotionAnalysis:
+        templates:
+          - templateName: {{ include "planning.fullname" . }}-prepromotion-analysis
+        args:
+          - name: preview-hash
+            valueFrom:
+              podTemplateHashValue: Latest
       # L'ancienne version reste up 5 min après la bascule, pour un rollback
       # instantané (juste re-basculer activeService) sans attendre un
       # nouveau déploiement.
