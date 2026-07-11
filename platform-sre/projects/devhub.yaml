@@ -25,6 +25,11 @@ spec:
     - https://argoproj.github.io/argo-helm
 
   destinations:
+    # La root Application elle-même vit dans argocd (destination de son propre
+    # spec.destination), même si elle ne pose aucune ressource applicative
+    # là-dedans — sans cette entrée ArgoCD refuse la root avec InvalidSpecError.
+    - server: https://kubernetes.default.svc
+      namespace: argocd
     - server: https://kubernetes.default.svc
       namespace: devhub-*
     - server: https://kubernetes.default.svc

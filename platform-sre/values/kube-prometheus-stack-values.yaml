@@ -77,6 +77,12 @@ kubeEtcd:
   enabled: false
 kubeProxy:
   enabled: false
+# coreDns pose un Service + ServiceMonitor dans kube-system par défaut — hors
+# du clusterResourceWhitelist/destinations volontairement restreints de notre
+# AppProject (on ne veut pas qu'une Application gère des ressources dans
+# kube-system). Désactivé pour la même raison que les 4 ci-dessus.
+coreDns:
+  enabled: false
 
 # ---- Operator ----
 prometheusOperator:
