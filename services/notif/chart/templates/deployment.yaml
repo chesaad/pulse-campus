@@ -1,0 +1,65 @@
+{{- /*
+  Deployment de SECOURS — pour bootstrapper le service tant que le Rollout
+  n'est pas écrit. Dans le tronc du TP, notif reste en Deployment (cf. étape 5)
+  pour servir de point de comparaison. Le flag `useDeployment` reste donc à true.
+*/ -}}
+{{- if .Values.useDeployment }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "notif.fullname" . }}
+  labels:
+    {{- include "notif.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "notif.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "notif.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: {{ .Values.securityContext.runAsNonRoot }}
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+      containers:
+        - name: notif
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          env:
+            - name: PORT
+              value: {{ .Values.service.targetPort | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.env.LOG_LEVEL | quote }}
+            - name: METRICS_BUCKETS
+              value: {{ .Values.metrics.buckets | quote }}
+            - name: METRICS_BUSINESS_ENABLED
+              value: {{ .Values.metrics.businessEnabled | quote }}
+            - name: VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: COMMIT
+              value: {{ .Values.image.tag | quote }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: {{ .Values.securityContext.readOnlyRootFilesystem }}
+            allowPrivilegeEscalation: {{ .Values.securityContext.allowPrivilegeEscalation }}
+            capabilities:
+              {{- toYaml .Values.securityContext.capabilities | nindent 14 }}
+{{- end }}

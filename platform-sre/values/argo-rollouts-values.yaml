@@ -1,0 +1,38 @@
+# Values du chart argo-rollouts.
+# Référence : https://github.com/argoproj/argo-helm/tree/main/charts/argo-rollouts
+#
+# Étape 5 du poly.
+
+# Active le dashboard Web et l'expose via ingress sur rollouts.devhub.local.
+dashboard:
+  enabled: true
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - rollouts.devhub.local
+    paths:
+      - /
+    pathType: Prefix
+
+# Active le service de notifications utilisé en étape 10.
+notifications:
+  notifiers: {}
+  # TODO étape 10 : configurez ici les webhooks (succès, échec).
+  # secret:
+  #   create: true
+  # configmap:
+  #   create: true
+
+# En kind, gardez les ressources légères.
+controller:
+  replicas: 1
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      # Doit correspondre à prometheusSpec.serviceMonitorSelector.matchLabels.release
+      # dans kube-prometheus-stack-values.yaml pour être scrapé (même piège que
+      # pour les 3 services applicatifs — cf. Annexe B du poly).
+      additionalLabels:
+        release: kps

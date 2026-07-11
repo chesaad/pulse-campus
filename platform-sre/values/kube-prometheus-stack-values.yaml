@@ -1,0 +1,87 @@
+# Values du chart kube-prometheus-stack pour le TP 3.
+# Référence : https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+#
+# Ce fichier est volontairement minimaliste. Tweakez-le étape 3.
+
+fullnameOverride: kps
+
+# ---- Grafana ----
+grafana:
+  enabled: true
+  # Mot de passe admin lu depuis un Secret créé hors-Git (kubectl create secret,
+  # cf. RAPPORT.md étape 3) — jamais en clair ici. Le Secret doit exister dans
+  # le namespace monitoring AVANT la première synchro du pod Grafana.
+  admin:
+    existingSecret: grafana-admin-credentials
+    userKey: admin-user
+    passwordKey: admin-password
+  defaultDashboardsTimezone: browser
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.devhub.local
+    path: /
+  # Auto-discovery des dashboards posés en ConfigMap avec le label `grafana_dashboard=1`.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+
+# ---- Prometheus ----
+prometheus:
+  enabled: true
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - prometheus.devhub.local
+    paths:
+      - /
+  prometheusSpec:
+    # Rétention courte pour le TP — adaptez si vous gardez le cluster longtemps.
+    retention: 15d
+    # En kind 2 nœuds, EmptyDir est suffisant pour un TP (cf. défi bonus non
+    # traité : PVC nécessaire en prod pour survivre à un redémarrage de pod).
+    storageSpec: {}
+    # Sélectionne TOUS les ServiceMonitor portant le label `release: kps`,
+    # quel que soit leur namespace. C'est l'option la plus permissive,
+    # utile en TP.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector:
+      matchLabels:
+        release: kps
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector:
+      matchLabels:
+        release: kps
+
+# ---- Alertmanager ----
+alertmanager:
+  enabled: true
+  # TODO étape 10 : votre configuration Alertmanager (routes, receivers).
+  # Tant que vide, le sous-chart utilise une config par défaut qui ne route
+  # nulle part.
+  config: {}
+
+# ---- Sous-charts à désactiver sur kind ----
+# Kind ne fournit pas les endpoints standards de la control plane.
+# Laissez à false sinon Prometheus aura des cibles DOWN en permanence.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# ---- Operator ----
+prometheusOperator:
+  admissionWebhooks:
+    # En cluster local kind, l'auto-patch peut bloquer ; on simplifie.
+    patch:
+      enabled: false
+    enabled: false

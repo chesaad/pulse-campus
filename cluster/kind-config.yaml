@@ -1,0 +1,28 @@
+# Config kind pour le cluster TP 3.
+# Consommée par `make cluster-up`.
+#
+# Choix faits ici :
+#   - 1 control-plane + 1 worker (identique au TP 2) ;
+#   - le control-plane est labellisé `ingress-ready=true` (ingress-nginx s'y déploie) ;
+#   - les ports 80/443 du control-plane sont publiés sur l'hôte, ce qui rend les
+#     ingress accessibles via http://<host>.devhub.local depuis votre navigateur.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: pulse
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+  - role: worker

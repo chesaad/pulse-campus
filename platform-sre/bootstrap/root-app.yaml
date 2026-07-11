@@ -1,0 +1,41 @@
+# Root Application (pattern App of Apps) — version TP 3.
+#
+# C'est la SEULE Application que vous créez à la main avec `kubectl apply`.
+# Tout le reste sera créé par elle, à partir des fichiers de `platform-sre/apps/`.
+#
+# Référence : https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devhub
+
+  source:
+    repoURL: https://github.com/chesaad/pulse-campus.git
+    targetRevision: main
+    # Recurse sur platform-sre/apps : observability + dev.
+    path: platform-sre/apps
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  # selfHeal:true — même choix qu'au TP2 : un kubectl edit accidentel sur la
+  # root (le point d'entrée unique de toute la plateforme) doit être corrigé
+  # automatiquement, sinon la définition-même de "GitOps" est violée.
+  # prune:false — un chemin mal tapé dans platform-sre/apps/ ne doit jamais
+  # supprimer toutes les Applications enfants (observability + les 3 services)
+  # d'un coup ; une suppression reste un acte délibéré (Application par Application).
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

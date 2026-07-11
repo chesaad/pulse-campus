@@ -1,0 +1,26 @@
+{{- /*
+  Service unique fourni pour démarrer.
+  En étape 5 (ou étape 8 si vous choisissez planning en blueGreen) vous écrirez
+  les Services additionnels : service-stable.yaml et service-preview.yaml
+  (ou service-canary.yaml).
+  Le label `release` est requis pour que le ServiceMonitor du
+  kube-prometheus-stack le découvre (cf. étape 4).
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "planning.fullname" . }}
+  labels:
+    {{- include "planning.labels" . | nindent 4 }}
+    {{- if .Values.monitoring.enabled }}
+    release: {{ .Values.monitoring.serviceMonitor.release | quote }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "planning.selectorLabels" . | nindent 4 }}

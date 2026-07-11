@@ -1,0 +1,67 @@
+# Values par défaut du chart annuaire.
+# Surchargées par values-dev.yaml selon l'environnement.
+
+image:
+  repository: ghcr.io/changeme/annuaire
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  host: annuaire.devhub.local
+  path: /
+
+env:
+  LOG_LEVEL: info
+
+# Métriques Prometheus — paramètres injectés au pod via variables d'environnement.
+# SLO p95 < 300ms (étape 1) : le défaut a déjà un bucket exact à 0.3, conservé tel quel.
+metrics:
+  buckets: "0.05,0.1,0.2,0.3,0.5,1,2,5"
+  businessEnabled: false
+
+# Sera passé à true en étape 4 (ServiceMonitor activé).
+monitoring:
+  enabled: false
+  serviceMonitor:
+    interval: 30s
+    # Doit correspondre au releaseName du chart kube-prometheus-stack.
+    release: kps
+
+# Tant que le Rollout n'est pas écrit (étape 5), le chart garde un Deployment
+# de secours pour démarrer. Passez à false dès que rollout.yaml est en place.
+useDeployment: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+probes:
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 2
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 10

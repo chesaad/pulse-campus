@@ -1,0 +1,56 @@
+# AppProject ArgoCD : `devhub` (élargi pour le TP 3)
+#
+# Reprise de l'AppProject du TP 2 avec un cercle de destinations élargi :
+#   - les namespaces applicatifs (devhub-*)
+#   - le namespace monitoring (kube-prometheus-stack)
+#   - le namespace argo-rollouts (contrôleur Argo Rollouts)
+#
+# Référence : https://argo-cd.readthedocs.io/en/stable/operator-manual/project-management/
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: devhub
+  namespace: argocd
+spec:
+  description: Plateforme DevHub Campus SRE (TP 3)
+
+  # Le fork Git (manifestes + values) et les deux repos Helm distants utilisés
+  # par les Applications multi-source (kube-prometheus-stack, argo-rollouts).
+  # Pas de "*" : un AppProject qui autorise n'importe quelle source perd tout
+  # son intérêt de garde-fou.
+  sourceRepos:
+    - https://github.com/chesaad/pulse-campus.git
+    - https://prometheus-community.github.io/helm-charts
+    - https://argoproj.github.io/argo-helm
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: devhub-*
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+    - server: https://kubernetes.default.svc
+      namespace: argo-rollouts
+
+  # Le kube-prometheus-stack pose beaucoup de CRDs cluster-scoped.
+  # En l'état (vide) ArgoCD bloquerait leur création. Vous devez whitelister
+  # au minimum les CRDs et namespaces pour que la stack s'installe.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: apiregistration.k8s.io
+      kind: APIService
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

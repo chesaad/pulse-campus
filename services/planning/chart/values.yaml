@@ -1,0 +1,62 @@
+# Values par défaut du chart planning.
+# Surchargées par values-dev.yaml selon l'environnement.
+
+image:
+  repository: ghcr.io/changeme/planning
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  host: planning.devhub.local
+  path: /
+
+env:
+  LOG_LEVEL: info
+
+metrics:
+  # SLO p95 < 400ms (étape 1) : bucket exact à 0.4 pour un quantile précis à ce seuil.
+  buckets: "0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,2,5"
+  businessEnabled: true
+
+monitoring:
+  enabled: false
+  serviceMonitor:
+    interval: 30s
+    release: kps
+
+useDeployment: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+probes:
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 2
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 10

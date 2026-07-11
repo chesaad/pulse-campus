@@ -1,0 +1,33 @@
+# Application ArgoCD : notif-dev
+#
+# Déploie le chart Helm de services/notif/chart dans le namespace devhub-dev.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: notif-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devhub
+
+  source:
+    repoURL: https://github.com/chesaad/pulse-campus.git
+    targetRevision: main
+    path: services/notif/chart
+    helm:
+      valueFiles:
+        - values-dev.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devhub-dev
+
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

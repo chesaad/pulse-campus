@@ -1,0 +1,25 @@
+{{- /*
+  Service unique fourni pour démarrer.
+  En étape 5 vous écrirez DEUX services supplémentaires : service-stable.yaml
+  et service-canary.yaml, référencés par le Rollout pour le traffic split.
+  Le label `release` est requis pour que le ServiceMonitor du
+  kube-prometheus-stack le découvre (cf. étape 4).
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "annuaire.fullname" . }}
+  labels:
+    {{- include "annuaire.labels" . | nindent 4 }}
+    {{- if .Values.monitoring.enabled }}
+    release: {{ .Values.monitoring.serviceMonitor.release | quote }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "annuaire.selectorLabels" . | nindent 4 }}

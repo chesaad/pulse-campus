@@ -1,0 +1,26 @@
+# Artefacts locaux
+.DS_Store
+*.log
+*.tmp
+*.swp
+
+# Build artefacts
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+build/
+
+# Go
+/bin/
+vendor/
+
+# Outils
+.idea/
+.vscode/
+*.iml
+
+# Helm
+charts/*.tgz

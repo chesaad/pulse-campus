@@ -1,0 +1,55 @@
+# Application ArgoCD : kube-prometheus-stack
+#
+# Installe Prometheus, Alertmanager, Grafana, node-exporter et
+# kube-state-metrics dans le namespace `monitoring` via le chart Helm
+# de la communauté Prometheus.
+#
+# Étape 3 du poly.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devhub
+
+  sources:
+    # 1) le chart distant.
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      # Version figée au 2026-07-11 (`helm search repo --versions`), vérifiée
+      # disponible. Pas de HEAD mouvant.
+      targetRevision: "87.15.1"
+      helm:
+        releaseName: kps
+        # On référence le fichier values du repo (source 2 ci-dessous).
+        valueFiles:
+          - $values/platform-sre/values/kube-prometheus-stack-values.yaml
+    # 2) le repo où vit le fichier de values.
+    - repoURL: https://github.com/chesaad/pulse-campus.git
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    # Activé : le chart pose ~60 CRDs + webhooks, la première synchro sur un
+    # cluster kind (I/O disque limité) peut timeout côté ArgoCD avant que tout
+    # soit Ready. Retry avec backoff plutôt que rester bloqué en erreur.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
