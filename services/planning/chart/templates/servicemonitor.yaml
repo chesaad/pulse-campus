@@ -16,6 +16,11 @@ spec:
   namespaceSelector:
     matchNames:
       - {{ .Release.Namespace }}
+  # Nécessaire pour l'AnalysisTemplate prePromotionAnalysis (étape 8), qui
+  # distingue la preview de l'active via ce label — même piège/parade que
+  # pour annuaire à l'étape 7.
+  podTargetLabels:
+    - rollouts-pod-template-hash
   endpoints:
     - port: http
       path: /metrics

@@ -1,0 +1,35 @@
+{{- /*
+  AnalysisTemplate — étape 8, prePromotionAnalysis. Vérifie la preview
+  pendant 2 minutes avant d'autoriser la bascule active <-> preview :
+  une seule métrique (taux d'erreur), volontairement plus simple que
+  l'AnalysisTemplate canary d'annuaire (étape 7) — le blueGreen n'a qu'une
+  décision binaire à prendre (bascule ou pas), pas de paliers progressifs.
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "planning.fullname" . }}-prepromotion-analysis
+  labels:
+    {{- include "planning.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: preview-hash
+
+  metrics:
+    - name: preview-error-rate
+      # 2 minutes (poly, étape 8) : 30s x 4 mesures.
+      interval: 30s
+      count: 4
+      failureLimit: 0
+      inconclusiveLimit: 2
+      successCondition: result[0] < 0.01
+      failureCondition: result[0] >= 0.01
+      provider:
+        prometheus:
+          address: http://prometheus-operated.monitoring.svc.cluster.local:9090
+          query: |
+            (
+              (sum(rate(http_requests_total{service="planning", rollouts_pod_template_hash="{{ "{{args.preview-hash}}" }}", status_class="5xx"}[2m])) OR on() vector(0))
+              /
+              sum(rate(http_requests_total{service="planning", rollouts_pod_template_hash="{{ "{{args.preview-hash}}" }}"}[2m]))
+            ) OR on() vector(0)

@@ -19,10 +19,13 @@ ingress:
   enabled: true
   className: nginx
   host: planning.devhub.local
+  # Étape 8 : Ingress preview séparé, joignable en interne uniquement.
+  previewHost: planning-preview.devhub.local
   path: /
 
 env:
   LOG_LEVEL: info
+  FAIL_RATE: "0"
 
 metrics:
   # SLO p95 < 400ms (étape 1) : bucket exact à 0.4 pour un quantile précis à ce seuil.
@@ -34,8 +37,6 @@ monitoring:
   serviceMonitor:
     interval: 30s
     release: kps
-
-useDeployment: true
 
 resources:
   requests:

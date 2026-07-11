@@ -1,0 +1,26 @@
+{{- /*
+  Ingress "preview" — étape 8. Joignable uniquement en interne
+  (planning-preview.devhub.local), permet de valider la nouvelle version
+  avant bascule du trafic utilisateur (curl manuel, ou prePromotionAnalysis).
+*/ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "planning.fullname" . }}-preview
+  labels:
+    {{- include "planning.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.previewHost | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "planning.fullname" . }}-preview
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
