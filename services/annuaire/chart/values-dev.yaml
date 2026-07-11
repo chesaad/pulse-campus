@@ -6,7 +6,7 @@
 # automatisé changerait pour déclencher un déploiement (poly, "La promesse de
 # cette chaîne", étape 1).
 image:
-  tag: demo-notif-success-v3
+  tag: demo-notif-abort
 
 ingress:
   enabled: true
