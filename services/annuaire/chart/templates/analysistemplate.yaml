@@ -43,15 +43,20 @@ spec:
       provider:
         prometheus:
           address: http://prometheus-operated.monitoring.svc.cluster.local:9090
-          # "OR on() vector(0)" : tant qu'aucune 5xx n'a jamais été vue, cette
-          # combinaison de labels n'existe pas du tout dans Prometheus (pas
-          # "0", vraiment absente) — sans ce filet, le fournisseur Prometheus
-          # d'Argo Rollouts plante sur un résultat vide ("reflect: slice
-          # index out of range") au lieu de lire un taux d'erreur de 0.
+          # "OR on() vector(0)" appliqué au résultat ENTIER de la division, pas
+          # seulement au numérateur : en division vectorielle PromQL, si l'UN
+          # OU L'AUTRE des deux côtés est vide (ex. dénominateur vide juste
+          # après le démarrage du pod canary, avant le premier scrape dans la
+          # fenêtre [2m]), le résultat de la division est vide aussi — pas
+          # NaN. Sans ce filet sur l'expression complète, le fournisseur
+          # Prometheus d'Argo Rollouts plante sur un résultat vide ("reflect:
+          # slice index out of range") au lieu de lire un taux d'erreur de 0.
           query: |
-            (sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}", status_class="5xx"}[2m])) OR on() vector(0))
-            /
-            sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m]))
+            (
+              (sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}", status_class="5xx"}[2m])) OR on() vector(0))
+              /
+              sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m]))
+            ) OR on() vector(0)
 
     - name: latency-p95
       interval: 30s
