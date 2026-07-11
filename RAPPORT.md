@@ -145,4 +145,25 @@ secret/grafana-admin-credentials created
 
 Piège du poly explicitement anticipé : le chart `kube-prometheus-stack` pose beaucoup de CRDs, un `OutOfSync` après le premier sync est souvent dû à un mismatch d'`apiVersion` — `ServerSideApply=true` dans `syncOptions` (déjà présent dans le squelette) est la parade documentée dans les notes de version du chart.
 
+Piège rencontré en pratique (non documenté dans le poly) : le chart pose par défaut un sous-composant `coreDns` qui crée un `Service` dans le namespace `kube-system` — refusé par notre `AppProject` (destinations volontairement restreintes à `argocd`/`devhub-*`/`monitoring`/`argo-rollouts`, pas `kube-system`). Corrigé en désactivant `coreDns.enabled: false`, pour la même raison que `kubeControllerManager`/`kubeScheduler`/`kubeEtcd`/`kubeProxy` (déjà désactivés dans le squelette) : kind n'expose pas ces endpoints de control-plane de la même façon qu'un vrai cluster managé, et on ne veut de toute façon pas qu'une Application gère des ressources hors de son périmètre.
+
+---
+
+## Étape 4 — ServiceMonitor + dashboard Grafana par service
+
+`templates/servicemonitor.yaml` ajouté dans les 3 charts (annuaire, planning, **et notif** — bien que non-canary, il est observé comme les deux autres, cf. contrat RED commun). Gabarit identique pour les trois : gated par `.Values.monitoring.enabled`, label `release: {{ .Values.monitoring.serviceMonitor.release }}` sur le ServiceMonitor lui-même (piège n°1 de l'Annexe B du poly — sans ce label, Prometheus l'ignore silencieusement), `namespaceSelector` restreint au namespace du service, endpoint sur le port nommé `http` et le chemin `/metrics`. Activé en dev via `values-dev.yaml` (`monitoring.enabled: true`).
+
+Dashboards (`platform-sre/dashboards/<service>.json`, un par service, gabarit commun) : 4 panneaux minimum comme demandé, templatés par les variables Grafana `$service`, `$namespace`, `$instance` (valeurs par défaut alignées sur le service courant, mais changeables en haut du dashboard pour comparer un autre service/namespace sans dupliquer le JSON) :
+
+| Panneau | PromQL | Ce qu'il sert à voir |
+|---|---|---|
+| Request rate (RPS) | `sum(rate(http_requests_total{service="$service", namespace="$namespace"}[5m])) by (route)` | Le SLI de trafic — sert de dénominateur à tous les autres SLI (étape 1). Une chute à 0 sans déploiement en cours est le premier signal d'incident. |
+| Error rate (5xx %) | `100 * sum(rate(http_requests_total{service="$service", namespace="$namespace", status_class="5xx"}[5m])) / sum(rate(http_requests_total{service="$service", namespace="$namespace"}[5m]))` | Le SLI de disponibilité (étape 1), directement comparable au SLO de 99.5%/99% par service — au-delà de 0.5%/1% en continu, l'error budget mensuel (3h36/7h12) s'érode. |
+| Latence p50/p95/p99 | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="$service", namespace="$namespace"}[5m])) by (le))` (×3 pour 0.50/0.95/0.99) | Le p95 est directement le SLI de latence de l'étape 1 (comparé au SLO 300/400/200ms selon le service) ; p50 et p99 donnent le contexte (une p50 stable avec un p99 qui s'envole = une sous-population de requêtes dégradée, pas tout le trafic). |
+| Build info (version active) | `{__name__=~"$build_info_metric", namespace="$namespace"}` (table, `instant`) | Le tag d'image actif (`version`, `commit`) par pod — répond à "quelle version tourne réellement là, maintenant" sans avoir à `kubectl describe` chaque pod. |
+
+Nuance sur la réutilisabilité : les 3 premiers panneaux sont génériquement templatés par `$service`/`$namespace` grâce au contrat de labels commun (`http_requests_total`, `http_request_duration_seconds` identiques dans les 3 langages). Le panneau *Build info* ne l'est pas complètement : le nom de la métrique change par service (`annuaire_build_info` / `planning_build_info` / `notif_build_info`), donc une variable Grafana `constant` (`$build_info_metric`) fixe ce nom par dashboard exporté plutôt que de le rendre sélectionnable — un vrai dashboard unique inter-services nécessiterait soit une convention de nommage unique (`build_info{service=...}` sans préfixe), soit une `recording rule` qui uniformise le nom, ce qui n'a pas été fait ici pour rester fidèle à l'instrumentation fournie (« vous n'aurez jamais à la modifier »).
+
+Les dashboards sont commités en JSON pur (source de vérité "exportée") puis enveloppés en `ConfigMap` (label `grafana_dashboard: "1"`) via une petite Kustomization (`platform-sre/dashboards/kustomization.yaml`) déployée par une nouvelle Application ArgoCD `dashboards` — nécessaire car le sidecar de Grafana découvre des `ConfigMap`, pas des fichiers JSON bruts dans Git.
+
 ---

@@ -85,9 +85,17 @@ coreDns:
   enabled: false
 
 # ---- Operator ----
+# Suggestion initiale du squelette (patch.enabled/enabled: false) écrite pour
+# une version plus ancienne du chart. Sur la 87.15.1 réellement installée
+# (vérifiée 2026-07-11), désactiver purement et simplement les admission
+# webhooks laisse le Deployment de l'operator monter un volume Secret
+# "kps-admission" que plus personne ne crée → pod bloqué en
+# ContainerCreating indéfiniment. La configuration supportée sans
+# cert-manager sur un cluster kind est de garder les admission webhooks
+# activés et de laisser le Job de patch générer lui-même un certificat
+# auto-signé au premier install.
 prometheusOperator:
   admissionWebhooks:
-    # En cluster local kind, l'auto-patch peut bloquer ; on simplifie.
+    enabled: true
     patch:
-      enabled: false
-    enabled: false
+      enabled: true
