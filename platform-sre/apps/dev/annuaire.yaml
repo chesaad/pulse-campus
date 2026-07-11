@@ -24,6 +24,18 @@ spec:
     server: https://kubernetes.default.svc
     namespace: devhub-dev
 
+  # Argo Rollouts patche dynamiquement le sélecteur des Services stable/canary
+  # (ajout du label rollouts-pod-template-hash) pour router vers le bon
+  # ReplicaSet — un champ que Git ne peut pas connaître à l'avance. Sans ce
+  # ignoreDifferences, l'Application reste perpétuellement OutOfSync dès
+  # qu'un canary a tourné au moins une fois (documenté dans la doc officielle
+  # Argo Rollouts, intégration ArgoCD).
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector
+
   syncPolicy:
     automated:
       prune: false

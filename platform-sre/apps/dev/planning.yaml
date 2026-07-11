@@ -24,6 +24,15 @@ spec:
     server: https://kubernetes.default.svc
     namespace: devhub-dev
 
+  # Même raison que sur annuaire-dev : planning passera en Rollout blueGreen
+  # (étape 8), dont le contrôleur patche aussi dynamiquement les sélecteurs
+  # de Service (activeService/previewService).
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector
+
   syncPolicy:
     automated:
       prune: false
