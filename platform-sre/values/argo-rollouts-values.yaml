@@ -27,10 +27,17 @@ notifications:
   # dans les logs du contrôleur) : le moteur de notifications attend un
   # service distinct par clé, pas une collection sous une clé unique.
   notifiers:
-    service.webhook.primary: |
-      url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
-    service.webhook.rollout-success: |
-      url: http://webhook-mock.monitoring.svc.cluster.local:8080/rollout-success
+    service.webhook: |
+      primary:
+        url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
+        headers:
+          - name: Content-Type
+            value: application/json
+      rollout-success:
+        url: http://webhook-mock.monitoring.svc.cluster.local:8080/rollout-success
+        headers:
+          - name: Content-Type
+            value: application/json
   templates:
     template.rollout-completed: |
       message: |
