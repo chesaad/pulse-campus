@@ -193,3 +193,65 @@ $ curl -s --data-urlencode 'query=sum(rate(http_requests_total{service="annuaire
 p95 à 47.5 ms (SLO à 300 ms) et disponibilité à 100 % sur du trafic sans erreur injectée — cohérent, sert de baseline "avant canary" pour les étapes suivantes.
 
 ---
+
+## Étape 5 — Du Deployment au Rollout
+
+Argo Rollouts installé via l'Application ArgoCD `argo-rollouts` (étape 3), dashboard exposé sur `rollouts.devhub.local`, contrôleur confirmé `Healthy` et son ServiceMonitor scrapé par Prometheus (`argo-rollouts-metrics: up`).
+
+`annuaire` migré : `rollout.yaml` remplace `deployment.yaml` (supprimé du chart, pas conservé en doublon — piège n°1 du poly explicitement évité). Stratégie canary minimaliste, trois étapes simples, pas encore d'`AnalysisTemplate` (étape 7) :
+
+```yaml
+strategy:
+  canary:
+    stableService: annuaire
+    canaryService: annuaire-canary
+    trafficRouting:
+      nginx:
+        stableIngress: annuaire
+    steps:
+      - setWeight: 20
+      - pause: { duration: 30s }
+      - setWeight: 50
+      - pause: { duration: 30s }
+      - setWeight: 100
+```
+
+`service-stable.yaml` garde le nom `annuaire` (l'`Ingress` existant n'a rien à changer), `service-canary.yaml` ajoute `annuaire-canary`. `trafficRouting.nginx.stableIngress` référence l'Ingress existant : Argo Rollouts fait un **vrai split au niveau requêtes** via `ingress-nginx`, pas une approximation par ratio de replicas.
+
+Déclenchement réel (changement de `image.tag` en dev, commité — cf. contrainte "aucun `kubectl edit`", tout passe par Git) :
+
+```
+$ kubectl argo rollouts get rollout annuaire -n devhub-dev
+Status:          ॥ Paused
+Message:         CanaryPauseStep
+Step:            1/5   SetWeight: 20   ActualWeight: 20
+Images: ghcr.io/chesaad/annuaire:d45dbf4 (stable), ghcr.io/chesaad/annuaire:d45dbf4-canary-demo (canary)
+Replicas: Desired 2, Current 3, Updated 1   # 1 pod canary + 2 pods stable
+
+$ kubectl get ingress annuaire-annuaire-canary -n devhub-dev -o jsonpath='{.metadata.annotations.nginx\.ingress\.kubernetes\.io/canary-weight}'
+50   # capturé pendant l'étape 3/5 (SetWeight:50) — confirme un split réel au niveau ingress-nginx,
+     # pas seulement au niveau du nombre de pods
+
+# ... 30s plus tard ...
+Status: ✔ Healthy   Step: 5/5   SetWeight: 100   ActualWeight: 100
+Images: ghcr.io/chesaad/annuaire:d45dbf4-canary-demo (stable)   # promu
+```
+
+Défi bonus (résolu en pratique, pas seulement en lecture de doc) — *"inspectez les ressources que crée Argo Rollouts pendant un canary : que voyez-vous d'inattendu ? À quoi sert l'Ingress secondaire ?"* :
+
+```
+$ kubectl get ingress -n devhub-dev
+NAME                       HOSTS
+annuaire                   annuaire.devhub.local   # l'Ingress stable, écrit dans notre chart
+annuaire-annuaire-canary   annuaire.devhub.local    # créé DYNAMIQUEMENT par le contrôleur Argo Rollouts, pas dans Git
+```
+
+L'Ingress secondaire n'existe pas dans le chart Helm — le contrôleur Argo Rollouts le crée et le détruit lui-même à chaque canary, avec les annotations `nginx.ingress.kubernetes.io/canary: "true"` et `canary-weight: "<N>"`. Il déclare le **même host** que l'Ingress stable : c'est ce doublon volontaire qui permet à `ingress-nginx` de router une fraction des requêtes vers le Service canary sans jamais toucher au DNS ni à l'Ingress stable lui-même — la mécanique documentée dans *Traffic Management with NGINX Ingress*.
+
+Piège rencontré et corrigé : après la migration, l'ancien `Deployment/annuaire` restait dans le cluster (l'Application a `prune: false`, cf. étape 3) — exactement le piège n°1 du poly ("deux ReplicaSets qui se battent pour les pods"). Supprimé manuellement (`kubectl delete deployment annuaire -n devhub-dev`), puisqu'il était strictement remplacé par le Rollout du même nom déjà `Healthy`.
+
+Second piège, non documenté dans le poly : après la migration, l'Application `annuaire-dev` restait perpétuellement `OutOfSync` malgré un état fonctionnellement identique. Diagnostiqué avec `argocd app manifests --core --source=git` vs `--source=live` : l'API Kubernetes défaultait silencieusement `protocol: TCP` sur le port du conteneur côté live. ArgoCD normalise ce genre de default connu pour les types natifs (`Deployment`), mais pas pour un champ de forme `PodSpec` imbriqué dans une CRD (`Rollout`). Corrigé en déclarant `protocol: TCP` explicitement dans `rollout.yaml` — plus généralement, une leçon pour la suite du TP : sur une CRD, il faut s'attendre à devoir déclarer explicitement des champs qu'on omettrait sans risque sur une ressource native.
+
+Validation : dashboard `rollouts.devhub.local` (Argo Rollouts) affiche le Rollout ; canary observé de bout en bout par `--watch`, capture ci-dessus.
+
+---
