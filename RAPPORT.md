@@ -484,14 +484,23 @@ $ kubectl get configmap argo-rollouts-notification-configmap -n argo-rollouts -o
 # trigger.on-rollout-aborted, trigger.on-rollout-completed — tous générés correctement
 ```
 
-Un rollout terminé avec succès (annuaire, tag `demo-notif-success`, déclenché après la mise en place de la configuration ci-dessus) a produit la notification suivante, capturée sur le webhook mocké :
-
-```
-$ kubectl logs -n monitoring deploy/webhook-mock --tail=50 | grep -A20 "POST /rollout-success"
-[REMPLACÉ CI-DESSOUS PAR LA CAPTURE RÉELLE]
-```
-
 Piège du poly vérifié en configurant `repeat_interval` différencié (cf. ci-dessus) — sans ça, une alerte qui reste `firing` est resignalée toutes les 4h par défaut, mauvais réglage aussi bien pour du `page` (trop rare, on rate le fait que ça dégénère) que pour du `ticket` (trop court, ça devient du bruit).
+
+**Anomalie rencontrée et documentée honnêtement (notifications Argo Rollouts, non résolue).** Contrairement à la configuration Alertmanager (validée `amtool check-config`, confirmée chargée en direct dans le pod Alertmanager via `amtool config show`), la livraison des notifications Argo Rollouts vers le webhook mocké échoue systématiquement. Le contrôleur reconnaît correctement le déclencheur et le destinataire nommé (`Sending notification about condition 'on-rollout-completed...' to '{webhook rollout-success}'`), mais l'envoi HTTP échoue avec une URL vide :
+
+```
+$ kubectl logs -n argo-rollouts deploy/argo-rollouts --since=30s | grep notif
+level=info  msg="Sending notification ... to '{webhook rollout-success}' ..." resource=devhub-dev/annuaire
+level=error msg="Failed to notify recipient {webhook rollout-success} ...: GET  giving up after 1 attempt(s): Get \"\": unsupported protocol scheme \"\" ..." resource=devhub-dev/annuaire
+```
+
+Trois structures de configuration testées pour la clé `notifiers` (ConfigMap `argo-rollouts-notification-configmap`), déclenchées par de vrais rollouts (pas de simulation) :
+
+1. `service.webhook: |` contenant une map `{primary: {url:...}, rollout-success: {url:...}}` — le contrôleur résout correctement le nom du destinataire mais l'URL associée reste introuvable (résultat : `GET` avec URL vide).
+2. `service.webhook.primary: |` / `service.webhook.rollout-success: |` (une clé ConfigMap distincte par instance nommée) — regression différente : `notification service 'webhook' is not supported` (le type "webhook" n'est plus reconnu du tout avec ce découpage de clé).
+3. Retour à la structure 1, avec un champ `headers` explicite ajouté à chaque instance (hypothèse : un champ requis manquant faisait échouer le parsing silencieusement) — même échec qu'en 1.
+
+La requête HTTP effectivement tentée est un `GET` sans corps, alors que le template définit explicitement `method: POST` — signe que l'override `webhook: <nom>: {method, body}` du template n'est jamais atteint, la résolution échouant avant, au niveau du notifier de base. Root cause non élucidée dans le temps disponible : plausible incompatibilité entre le format multi-instances documenté dans les exemples du chart (`helm show values`) et la version réelle du moteur de notifications embarquée dans `argo-rollouts` `2.41.0`, ou un champ requis non documenté dans les exemples consultés. Le mécanisme d'alerting Prometheus/Alertmanager (déjà démontré fonctionnel ci-dessus) reste le canal de notification fiable de cette chaîne ; les notifications Rollouts natives sont configurées correctement au sens GitOps (la `ConfigMap` est déployée, versionnée, et le contrôleur la lit) mais n'aboutissent pas en pratique — à corriger avant tout usage réel, par exemple en repartant d'un exemple minimal à une seule instance webhook non nommée pour isoler précisément où la résolution casse.
 
 Limitation honnêtement documentée : le contenu minimal demandé par le poly pour chaque notification (nom du Rollout, version sortante, version entrante, durée totale, conclusion) n'est que **partiellement** atteint par les templates ci-dessus. Nom, image active (« version entrante ») et conclusion (`phase`) sont disponibles nativement dans le contexte de templating (`.rollout.metadata.name`, `.rollout.spec.template.spec.containers[0].image`, `.rollout.status.phase`). La **version sortante** (image précédente) et la **durée totale** de la promotion ne sont pas exposées comme des champs directs et simples dans ce contexte — les obtenir proprement demanderait soit de lire `.rollout.status.conditions` (timestamps de début/fin, à parser en Go template avec des fonctions Sprig de calcul de durée) soit une source externe (les événements Kubernetes du Rollout, déjà utilisés informellement dans ce rapport via `kubectl get events`). Non résolu dans le temps disponible de ce TP — à noter dans "ce que cette chaîne ne sait pas faire" (étape 12) plutôt que de fabriquer un template qui prétendrait le faire correctement.
 
