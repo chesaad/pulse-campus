@@ -82,6 +82,10 @@ spec:
         - analysis:
             templates:
               - templateName: {{ include "annuaire.fullname" . }}-canary-analysis
+            args:
+              - name: canary-hash
+                valueFrom:
+                  podTemplateHashValue: Latest
         - setWeight: 50
         - pause: { duration: 30s }
         - setWeight: 100

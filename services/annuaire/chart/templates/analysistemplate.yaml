@@ -19,10 +19,12 @@ metadata:
   labels:
     {{- include "annuaire.labels" . | nindent 4 }}
 spec:
+  # Simple placeholder ici : c'est le step `analysis` du Rollout (rollout.yaml)
+  # qui fournit la vraie valeur via valueFrom.podTemplateHashValue — un
+  # AnalysisTemplate.spec.args ne supporte que fieldRef/secretKeyRef, pas
+  # podTemplateHashValue (spécifique aux steps de Rollout).
   args:
     - name: canary-hash
-      valueFrom:
-        podTemplateHashValue: Latest
 
   metrics:
     - name: error-rate
