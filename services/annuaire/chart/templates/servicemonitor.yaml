@@ -1,0 +1,29 @@
+{{- /*
+  ServiceMonitor (CRD posée par le Prometheus Operator) — dit à Prometheus
+  QUI scraper. Vit dans le namespace du service (devhub-dev), pas dans
+  monitoring. Activé par values.yaml (monitoring.enabled), passé à true en
+  environnement dev via values-dev.yaml (étape 4).
+*/ -}}
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "annuaire.fullname" . }}
+  labels:
+    {{- include "annuaire.labels" . | nindent 4 }}
+    # Doit correspondre à prometheusSpec.serviceMonitorSelector.matchLabels.release
+    # du chart kube-prometheus-stack, sinon Prometheus ignore ce ServiceMonitor
+    # silencieusement (piège le plus fréquent du poly, Annexe B).
+    release: {{ .Values.monitoring.serviceMonitor.release | quote }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "annuaire.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

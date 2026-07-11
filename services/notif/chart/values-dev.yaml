@@ -1,6 +1,9 @@
 # Surcharges pour l'environnement de développement (namespace devhub-dev).
 # Ne mettez ICI que ce qui diffère de values.yaml.
 
+image:
+  tag: d45dbf4
+
 ingress:
   enabled: true
   host: notif.devhub.local
@@ -8,6 +11,5 @@ ingress:
 env:
   LOG_LEVEL: debug
 
-# En étape 4 vous activerez le ServiceMonitor :
-# monitoring:
-#   enabled: true
+monitoring:
+  enabled: true

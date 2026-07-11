@@ -2,7 +2,7 @@
 # Surchargées par values-dev.yaml selon l'environnement.
 
 image:
-  repository: ghcr.io/changeme/annuaire
+  repository: ghcr.io/chesaad/annuaire
   tag: dev
   pullPolicy: IfNotPresent
 

@@ -1,6 +1,13 @@
 # Surcharges pour l'environnement de développement (namespace devhub-dev).
 # Ne mettez ICI que ce qui diffère de values.yaml.
 
+# Tag écrit par la CI (ici : posé manuellement, `make images-build` calcule
+# le SHA court via `git rev-parse --short HEAD`). C'est ce champ qu'un commit
+# automatisé changerait pour déclencher un déploiement (poly, "La promesse de
+# cette chaîne", étape 1).
+image:
+  tag: d45dbf4
+
 ingress:
   enabled: true
   host: annuaire.devhub.local
@@ -8,6 +15,5 @@ ingress:
 env:
   LOG_LEVEL: debug
 
-# En étape 4 vous activerez le ServiceMonitor :
-# monitoring:
-#   enabled: true
+monitoring:
+  enabled: true

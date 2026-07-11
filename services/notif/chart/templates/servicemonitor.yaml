@@ -1,0 +1,26 @@
+{{- /*
+  ServiceMonitor — voir le commentaire équivalent dans le chart annuaire.
+  notif reste en Deployment classique (pas de Rollout), mais il est
+  observé exactement comme les deux autres services : mêmes métriques RED,
+  même contrat de labels.
+*/ -}}
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "notif.fullname" . }}
+  labels:
+    {{- include "notif.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.serviceMonitor.release | quote }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "notif.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

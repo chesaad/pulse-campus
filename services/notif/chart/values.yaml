@@ -1,7 +1,7 @@
 # Values par défaut du chart notif.
 
 image:
-  repository: ghcr.io/changeme/notif
+  repository: ghcr.io/chesaad/notif
   tag: dev
   pullPolicy: IfNotPresent
 
