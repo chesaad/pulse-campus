@@ -6,7 +6,7 @@
 # automatisé changerait pour déclencher un déploiement (poly, "La promesse de
 # cette chaîne", étape 1).
 image:
-  tag: d45dbf4
+  tag: d45dbf4-canary-demo
 
 ingress:
   enabled: true
