@@ -73,6 +73,13 @@ spec:
       trafficRouting:
         nginx:
           stableIngress: {{ include "annuaire.fullname" . }}
+          # Étape 9 : routage header-based pour les tests internes. Une
+          # requête portant X-Beta-User: true atteint TOUJOURS le canary,
+          # indépendamment du setWeight courant — le header gagne, ce n'est
+          # pas additif avec le pourcentage (piège cité par le poly).
+          additionalIngressAnnotations:
+            canary-by-header: X-Beta-User
+            canary-by-header-value: "true"
       # Étape 7 : promotion sur preuve. Le step `analysis` interroge
       # Prometheus pendant 5 minutes (2 métriques, cf. analysistemplate.yaml)
       # avant d'autoriser la suite — plus d'intervention humaine nécessaire
