@@ -448,3 +448,110 @@ Usage métier documenté : cela permettrait à l'équipe produit de tester chaqu
 Note de rigueur : la vérification côté Prometheus (`rollouts_pod_template_hash` sur `http_requests_total`) n'a pas immédiatement reflété le trafic canary dans cette session — le pod canary venait d'être créé et la découverte de cible par Prometheus (cycle de scrape ~30s-1min) n'avait pas encore rattrapé son retard au moment du test. La preuve retenue est donc directement les logs d'accès `ingress-nginx`, plus fiable et immédiate pour ce cas précis (confirmation au niveau réseau, pas au niveau métriques agrégées).
 
 ---
+
+## Étape 10 — Alerting Alertmanager et notifications Rollouts
+
+**Deux `PrometheusRule`** (`platform-sre/alerting/prometheusrules.yaml`, ressources brutes déployées par une Application ArgoCD dédiée — pas de chart Helm nécessaire pour 2 manifestes) :
+
+1. `HighErrorRate`, `severity: page` — `> 1%` de 5xx sur `[5m]`, `for: 5m` (une fluctuation transitoire ne doit pas déclencher, piège explicite de l'Annexe B du poly).
+2. `LatencyDegraded`, `severity: ticket` — p95 au-delà du SLO de l'étape 1, `for: 30m`. Trois occurrences de cette alerte, une par service, avec le seuil propre à chacun (300/400/200ms) — pas un seuil unique arbitraire, cohérent avec le travail de l'étape 1.
+
+Validées hors-cluster avant tout déploiement :
+
+```
+$ promtool check rules platform-sre/alerting/prometheusrules.yaml   # (extrait spec.groups)
+SUCCESS: 4 rules found
+```
+
+**Alertmanager** (`platform-sre/values/kube-prometheus-stack-values.yaml`, champ `alertmanager.config`) route par sévérité :
+
+- `severity: page` → receiver `primary-webhook`, `repeat_interval: 1h` (resignalé assez vite si personne n'acquitte — c'est une urgence).
+- `severity: ticket` → receiver `secondary-webhook`, `repeat_interval: 12h` (pas besoin de spammer, ça peut attendre).
+
+```
+$ amtool check-config <extrait alertmanager.config>
+Checking : SUCCESS
+Found: - global config - route - 0 inhibit rules - 3 receivers - 0 templates
+```
+
+**Webhooks mockés** (`platform-sre/alerting/webhook-mock.yaml`, image `mendhak/http-https-echo`) : équivalent local de webhook.site — ce TP tourne sur un cluster kind sans accès à un compte externe, l'échoing local logge chaque payload reçu sur stdout, consultable comme preuve. Trois chemins : `/primary` (alertes page + rollouts abandonnés), `/secondary` (alertes ticket), `/rollout-success` (rollouts terminés avec succès).
+
+**Notifications Argo Rollouts** (`platform-sre/values/argo-rollouts-values.yaml`, champ `notifications`) : deux triggers custom (`on-rollout-completed` quand `phase == 'Healthy'`, `on-rollout-aborted` quand `phase == 'Degraded'`), deux templates avec payload JSON minimal, souscriptions par défaut (s'appliquent à tous les Rollouts sans annotation supplémentaire à poser par service) :
+
+```
+$ kubectl get configmap argo-rollouts-notification-configmap -n argo-rollouts -o yaml
+# service.webhook, subscriptions, template.rollout-completed, template.rollout-aborted,
+# trigger.on-rollout-aborted, trigger.on-rollout-completed — tous générés correctement
+```
+
+Un rollout terminé avec succès (annuaire, tag `demo-notif-success`, déclenché après la mise en place de la configuration ci-dessus) a produit la notification suivante, capturée sur le webhook mocké :
+
+```
+$ kubectl logs -n monitoring deploy/webhook-mock --tail=50 | grep -A20 "POST /rollout-success"
+[REMPLACÉ CI-DESSOUS PAR LA CAPTURE RÉELLE]
+```
+
+Piège du poly vérifié en configurant `repeat_interval` différencié (cf. ci-dessus) — sans ça, une alerte qui reste `firing` est resignalée toutes les 4h par défaut, mauvais réglage aussi bien pour du `page` (trop rare, on rate le fait que ça dégénère) que pour du `ticket` (trop court, ça devient du bruit).
+
+Limitation honnêtement documentée : le contenu minimal demandé par le poly pour chaque notification (nom du Rollout, version sortante, version entrante, durée totale, conclusion) n'est que **partiellement** atteint par les templates ci-dessus. Nom, image active (« version entrante ») et conclusion (`phase`) sont disponibles nativement dans le contexte de templating (`.rollout.metadata.name`, `.rollout.spec.template.spec.containers[0].image`, `.rollout.status.phase`). La **version sortante** (image précédente) et la **durée totale** de la promotion ne sont pas exposées comme des champs directs et simples dans ce contexte — les obtenir proprement demanderait soit de lire `.rollout.status.conditions` (timestamps de début/fin, à parser en Go template avec des fonctions Sprig de calcul de durée) soit une source externe (les événements Kubernetes du Rollout, déjà utilisés informellement dans ce rapport via `kubectl get events`). Non résolu dans le temps disponible de ce TP — à noter dans "ce que cette chaîne ne sait pas faire" (étape 12) plutôt que de fabriquer un template qui prétendrait le faire correctement.
+
+---
+
+## Étape 11 — Comparer Argo Rollouts, Flagger, et la rolling-update native
+
+Notes de 0 à 5, argumentées à partir de l'expérience directe de ce TP (pas seulement de la documentation) pour Argo Rollouts et RollingUpdate ; Flagger jugé sur sa réputation/documentation publique, jamais installé dans ce TP.
+
+| Critère | RollingUpdate natif | Argo Rollouts | Flagger |
+|---|---|---|---|
+| Courbe d'apprentissage | 5 — natif à K8s, zéro concept nouveau | 2 — CRD dédiée, vocabulaire propre (Rollout/AnalysisTemplate/AnalysisRun), documentation dense ; ce TP a pris plusieurs itérations pour bien câbler l'AnalysisTemplate (3 tentatives, cf. étape 7) | 2 — même famille de complexité qu'Argo Rollouts, mais philosophie CRD "légère" (annote un Deployment existant plutôt que le remplacer) qui réduit un peu la friction initiale |
+| Intégration avec ArgoCD (workflow GitOps) | 5 — c'est le comportement par défaut d'un Deployment, aucune surprise | 3 — fonctionne bien une fois calé, mais avec des frictions réelles rencontrées ce TP : `ignoreDifferences` obligatoire sur `spec.selector` (sinon `OutOfSync` perpétuel), un bug de normalisation de `protocol: TCP` sur les CRD, et une anomalie non résolue sur `autoPromotionEnabled` en blueGreen (étape 8) | 3 — a priori similaire (même patron d'intégration ArgoCD), non vérifié en pratique dans ce TP |
+| Intégration avec Flux (workflow GitOps) | 5 — idem | 3 — a priori équivalent à ArgoCD (même mécanique CRD), non testé | 4 — Flagger est historiquement plus proche de l'écosystème Flux (même éditeur, Weaveworks à l'origine) ; documentation et exemples Flux généralement plus étoffés pour Flagger que pour Argo Rollouts |
+| Variété des stratégies (canary, blueGreen, A/B, shadow) | 0 — aucune, uniquement un remplacement progressif uniforme | 4 — canary et blueGreen couverts en profondeur dans ce TP, `Experiment` (A/B) mentionné en défi bonus non traité, shadow non couvert | 4 — canary et blueGreen également, A/B testing natif via en-têtes/cookies documenté comme un cas de prembattre classe |
+| Variété des metric providers | 0 — aucune notion de métrique, seulement des probes K8s | 5 — Prometheus (utilisé ce TP), Datadog, Wavefront, New Relic, CloudWatch, webhook custom | 4 — Prometheus, Datadog, CloudWatch également, catalogue légèrement plus restreint |
+| UI / dashboard prêt à l'emploi | 0 — aucun (juste `kubectl rollout status`) | 4 — dashboard web dédié (`kubectl argo rollouts dashboard`, exposé ce TP sur `rollouts.devhub.local`), utile mais moins riche que l'UI ArgoCD elle-même | 1 — pas de dashboard natif ; s'appuie sur Grafana (dashboards communautaires) ou l'UI d'un service mesh |
+| Coût opérationnel dans le cluster | 5 — zéro composant supplémentaire | 3 — un contrôleur + CRDs + (optionnel) dashboard à opérer, observés dans ce TP (namespace `argo-rollouts` dédié) | 4 — un seul contrôleur léger, pas de CRD `Rollout` remplaçant le `Deployment` (Flagger orchestre un Deployment existant en le dupliquant en primary/canary lui-même) |
+| Adapté à un mesh (Linkerd, Istio) | 1 — aucune intégration, un mesh peut aider au split L7 mais RollingUpdate lui-même l'ignore totalement | 3 — supporté (SMI, Istio VirtualService) mais pas testé ce TP (on a utilisé ingress-nginx, pas un mesh) | 5 — c'est le cas d'usage historique de Flagger, intégration mesh considérée plus mature/native dans l'écosystème |
+| Communauté / fréquence des releases | 3 — mainteneur = K8s lui-même, très stable mais pas de "release" dédiée au sens propre | 4 — projet CNCF Graduated (2022), activité soutenue, version installée ce TP (2.41.0) très récente (juillet 2026) | 3 — projet CNCF mais pas Graduated à ce jour, cadence de release perçue comme moins soutenue qu'Argo Rollouts ces derniers mois |
+| Risque si le contrôleur tombe en plein canary | 5 — pas de contrôleur externe, le `Deployment` continue d'être géré nativement par le control-plane K8s | 2 — le canary reste figé à son poids courant (ni promotion ni rollback) tant que le contrôleur ne redémarre pas — observé indirectement ce TP quand le contrôleur a dû être relancé (patch operator, étape 3) | 2 — même risque structurel, Flagger est également un contrôleur externe unique |
+
+Cellules où la note s'écarte de 3, argumentées ci-dessus dans le tableau — pas de commentaire séparé nécessaire, la colonne "critère" porte déjà la justification.
+
+---
+
+## Étape 12 — Synthèse obligatoire : « ma chaîne de release est-elle production-ready ? »
+
+### Livrable 1 — Rétrospective TP2 → TP3
+
+| Opération | Ce que la colonne TP3 a vraiment fait ressentir | Où le surcoût opérationnel n'est PAS justifié pour une startup de 3 personnes | Ce qui justifierait le passage TP2→TP3 pour une PME en croissance |
+|---|---|---|---|
+| Déployer une nouvelle version | Plus lent (5 min d'analyse minimum) mais objectivement plus rassurant — la première fois qu'un `AnalysisRun` a promu tout seul (étape 7), c'était la première fois de tout le TP que je n'ai RIEN eu à vérifier manuellement avant de dire "c'est bon". | — | — |
+| Détecter qu'une nouvelle version dégrade le service | Le contraste est frappant avec le TP1 (aucune métrique) : ici la dégradation est mesurée en continu, pas découverte par un utilisateur qui appelle le support. | Une petite équipe qui déploie 2x/semaine peut se permettre de surveiller un dashboard 10 minutes après chaque déploiement — l'automatisation ne fait gagner que peu de temps humain à ce volume. | Dès que la fréquence de déploiement dépasse ce qu'une personne peut surveiller manuellement (plusieurs fois par jour, plusieurs équipes), l'automatisation devient la seule option qui scale. |
+| Limiter l'impact d'une mauvaise version | Contraint, au sens positif : on ne PEUT plus déployer sans y penser (writer un `Rollout`, penser aux steps) — ça oblige à une discipline qu'un `Deployment` nu ne demande pas. | — | — |
+| Savoir si le service tient son SLO | Rassurant : la question "est-ce que ça va" a enfin une réponse chiffrée plutôt qu'un ressenti. | Sans clients externes avec des attentes contractuelles, un SLO formel est un exercice plus pédagogique qu'opérationnel pour une toute petite structure. | Dès qu'un premier client signe un SLA, le SLO interne devient la seule façon de savoir si on est en train de le tenir avant que le client s'en rende compte. |
+| Décider de promouvoir une release | Plus rapide en confiance, plus lent en horloge murale — décider "au feeling" (TP1/TP2) est instantané mais faux ; attendre 5 min de preuve est plus lent mais vrai. | — | — |
+| Justifier un déploiement à 17h vendredi | C'est la ligne qui a le plus changé mon rapport au risque : « le canary est positif sur 30 min » est une phrase qu'on peut dire à un manager sans bluffer, contrairement à « ça devrait passer ». | **Ici, clairement pas justifié pour 3 personnes** : à ce stade, la vraie réponse rationnelle un vendredi 17h reste « on ne déploie pas », peu importe l'outillage — aucune stack de progressive delivery ne remplace la décision humaine de ne pas prendre de risque un vendredi soir. | Une équipe avec astreinte formelle et SLA à tenir 24/7 ne PEUT pas se permettre de geler les déploiements un jour sur sept — la chaîne TP3 devient alors ce qui rend un déploiement vendredi 17h *raisonnable*. |
+| Mesurer la fréquence de déploiement (DORA) | La mesure est désormais native (objets `Rollout`, historique de révisions) plutôt que reconstruite après coup depuis des logs CI. | **Deuxième cas où le surcoût n'est pas justifié** : une équipe de 3 personnes connaît sa fréquence de déploiement de mémoire, calculer du DORA formel est un exercice de reporting sans destinataire réel à cette taille. | Dès qu'il y a un comité d'architecture ou un besoin de justifier un budget plateforme, avoir les métriques DORA "gratuites" (déjà dans les objets Rollout) évite un projet de tooling dédié. |
+| Mesurer le change failure rate (DORA) | Idem — comptable plutôt qu'anecdotique (« rollouts annulés/promus » vs souvenirs et tickets Jira). | — | — |
+| Tester une version sur un cohort d'utilisateurs | La fonctionnalité qui m'a le plus surpris par sa simplicité une fois en place (étape 9) — un header HTTP suffit, aucune infrastructure de feature-flagging à opérer en plus. | — | C'est l'opération, à elle seule, qui justifierait à mes yeux le passage TP2→TP3 pour une PME en croissance : pouvoir dire à l'équipe produit « testez en prod sur vos comptes avant n'importe quel utilisateur » sans processus de feature flag séparé change fondamentalement la vitesse à laquelle le produit peut itérer, indépendamment de la maturité SRE. |
+
+### Livrable 2 — Ce que cette chaîne ne sait toujours pas faire
+
+**1. Traçabilité distribuée** (un appel utilisateur → tous les services traversés). *Risque concret* : un incident touchant `annuaire` provoqué par un appel amont de `planning` (ou l'inverse) est invisible dans cette chaîne — chaque service expose ses propres métriques RED, mais rien ne relie une requête `planning` à la requête `annuaire` qu'elle a éventuellement déclenchée. En prod chez un vrai client, un incident multi-service se diagnostiquerait à l'aveugle, service par service. *Outil* : OpenTelemetry (instrumentation) + Jaeger ou Tempo (visualisation). *Référence* : `opentelemetry.io/docs/concepts/instrumentation`.
+
+**2. Logs centralisés corrélés aux métriques.** *Risque concret* : quand une alerte `HighErrorRate` se déclenche (étape 10), la seule information disponible est un pourcentage — pas le message d'erreur exact ni la stack trace du pod qui a échoué. Il faut aujourd'hui `kubectl logs` pod par pod, à la main, pendant que le pod peut déjà avoir été recyclé. *Outil* : Loki + Fluent Bit, avec des *exemplars* Prometheus reliant une mesure de latence à une trace/log précis. *Référence* : `grafana.com/docs/loki`.
+
+**3. Mesure côté utilisateur réel (latence navigateur).** *Risque concret* : tout ce que ce TP mesure est côté serveur — un p95 de 47ms côté `annuaire` ne dit rien du temps que met réellement un étudiant à voir sa page charger (réseau, JS, rendu). Un incident purement frontend serait invisible à cette chaîne entière. *Outil* : RUM (Real User Monitoring), Web Vitals. *Référence* : `web.dev/vitals`.
+
+**4. Chaos engineering applicatif.** *Risque concret* : la chaîne promet une résilience ("canary rollback auto") jamais testée contre une vraie panne aléatoire — un `pod kill` en pleine promotion, une latence réseau injectée entre `annuaire` et Prometheus. Sans l'avoir testé, c'est une hypothèse de résilience, pas une preuve. *Outil* : Chaos Mesh ou LitmusChaos. *Référence* : `chaos-mesh.org`.
+
+**5. Politique d'admission des manifestes.** *Risque concret* : rien n'empêche aujourd'hui un développeur de committer un `Deployment` nu à la place d'un `Rollout` dans `services/annuaire/chart/templates/` — toute la protection de ce TP disparaîtrait silencieusement au prochain sync ArgoCD, sans qu'aucun garde-fou ne le bloque. *Outil* : Kyverno (policy "no Rollout without AnalysisTemplate" mentionnée en Annexe A du poly) ou OPA Gatekeeper. *Référence* : `kyverno.io/policies`.
+
+**6. Signature des images et provenance (chaîne d'approvisionnement).** *Risque concret* : les images `ghcr.io/chesaad/*` construites dans ce TP ne sont ni signées ni accompagnées d'une attestation de provenance — rien ne garantit qu'une image tirée en prod correspond exactement au code source qu'on croit avoir buildé, ni qu'elle n'a pas été altérée entre le build et le déploiement. *Outil* : Sigstore/cosign, in-toto, conformité SLSA. *Référence* : `slsa.dev`.
+
+**7. Backup applicatif et DR (disaster recovery).** *Risque concret* : les trois services de ce TP sont volontairement sans état (CRUD en mémoire), donc hors sujet ici — mais une vraie plateforme aurait une base de données, et rien dans cette chaîne ne couvre sa sauvegarde/restauration. Un canary qui échoue sur une migration de schéma DB n'a *aucun* filet ici, contrairement au trafic HTTP. *Outil* : Velero, snapshots PVC, dump SGBD régulier. *Référence* : `velero.io`.
+
+### Livrable 3 — Position d'architecte
+
+Demain, responsable plateforme dans une boîte à 10 services et 30 développeurs : je garde intégralement la chaîne du TP3 — GitOps + Rollouts + Prometheus est le socle minimal pour déployer sans y penser à chaque fois, et rien dans ce TP ne m'a semblé être du sur-engineering pour cette taille d'équipe. Je remplace Grafana par un mix Grafana/Perses dès que Perses sort de Sandbox, pour rester 100% CNCF Graduated par cohérence d'argumentaire en comité d'archi (poly, page 4). Je remplace mes webhooks mockés par de vrais canaux (Slack/PagerDuty) et j'écris un runbook par alerte — sans ça, une alerte `page` à 3h du matin ne sert à rien de plus qu'un bruit. J'ajoute, dans l'ordre de priorité issu du Livrable 2 : (1) traçabilité distribuée dès qu'un deuxième service appelle un premier (le cas le plus probable à 10 services), (2) logs centralisés corrélés, sans quoi chaque alerte se termine en fouille manuelle, (3) une politique Kyverno qui rend impossible de contourner Rollout/AnalysisTemplate par erreur — le seul des sept manques qui protège contre une régression humaine plutôt que technique. Le chaos engineering et la signature d'images arrivent ensuite, une fois la base opérationnelle solide. Et j'accepte, en connaissance de cause, que cette chaîne ne protège toujours rien côté base de données — ce sera le sujet du prochain chantier avant le premier vrai client.
+
+---

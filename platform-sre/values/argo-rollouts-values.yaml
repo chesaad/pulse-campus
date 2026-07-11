@@ -21,12 +21,16 @@ dashboard:
 # Prometheus severity:page — un abort de rollout mérite la même urgence
 # qu'une dégradation qui réveille à 3h du matin).
 notifications:
+  # Une clé "service.webhook.<nom>" par webhook nommé — et non un seul
+  # "service.webhook" contenant une map de plusieurs entrées, qui produisait
+  # un appel avec une URL vide ("unsupported protocol scheme ''", constaté
+  # dans les logs du contrôleur) : le moteur de notifications attend un
+  # service distinct par clé, pas une collection sous une clé unique.
   notifiers:
-    service.webhook: |
-      primary:
-        url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
-      rollout-success:
-        url: http://webhook-mock.monitoring.svc.cluster.local:8080/rollout-success
+    service.webhook.primary: |
+      url: http://webhook-mock.monitoring.svc.cluster.local:8080/primary
+    service.webhook.rollout-success: |
+      url: http://webhook-mock.monitoring.svc.cluster.local:8080/rollout-success
   templates:
     template.rollout-completed: |
       message: |
