@@ -403,3 +403,48 @@ Conséquence pragmatique : la configuration finale commitée reflète l'état **
 | Risque principal | Une fraction d'utilisateurs subit la régression pendant l'analyse | Coût ressources double, tout ou rien (pas de détection progressive) |
 
 ---
+
+## Étape 9 — Routage avancé : header-based pour les tests internes
+
+`trafficRouting.nginx.additionalIngressAnnotations` ajouté dans `rollout.yaml` :
+
+```yaml
+trafficRouting:
+  nginx:
+    stableIngress: annuaire
+    additionalIngressAnnotations:
+      canary-by-header: X-Beta-User
+      canary-by-header-value: "true"
+```
+
+Reportées automatiquement sur l'Ingress canary auto-générée :
+
+```
+$ kubectl get ingress annuaire-annuaire-canary -n devhub-dev -o jsonpath='{.metadata.annotations}' | jq .
+{
+  "nginx.ingress.kubernetes.io/canary": "true",
+  "nginx.ingress.kubernetes.io/canary-by-header": "X-Beta-User",
+  "nginx.ingress.kubernetes.io/canary-by-header-value": "true",
+  "nginx.ingress.kubernetes.io/canary-weight": "25"
+}
+```
+
+Démonstration en `curl`, confirmée par les logs d'accès `ingress-nginx` (la colonne entre crochets est l'upstream canary choisi, vide si la requête reste sur le stable) :
+
+```
+$ curl -H "Host: annuaire.devhub.local" http://127.0.0.1/students
+# nginx access log : ... [devhub-dev-annuaire-8080] [] 10.244.1.74:8080 ...   ← stable, canary upstream vide
+
+$ curl -H "Host: annuaire.devhub.local" -H "X-Beta-User: true" http://127.0.0.1/students
+# nginx access log : ... [devhub-dev-annuaire-8080] [devhub-dev-annuaire-canary-8080] 10.244.1.87:8080 ...   ← canary, systématiquement
+```
+
+`10.244.1.87` est vérifié être l'IP du pod canary (`kubectl get pods -o wide`) — 5 requêtes avec le header consécutives, 5 fois routées sur le canary, sans exception, indépendamment du `setWeight: 25` courant. Sans le header, retour observé sur les pods stables (`10.244.1.74`/`10.244.1.69`) dans la quasi-totalité des cas (comportement pondéré normal).
+
+Piège du poly vérifié en pratique : avec `canary-by-header`, le `canary-weight` est **ignoré** pour les requêtes qui matchent le header — ce n'est pas une combinaison additive, le header gagne. Confirmé : toutes les requêtes taggées ont atteint le canary même si le tirage aléatoire pondéré (25%) ne l'aurait statistiquement pas justifié à chaque fois.
+
+Usage métier documenté : cela permettrait à l'équipe produit de tester chaque release sur ses propres comptes (en ajoutant le header côté navigateur via une extension, ou côté API via un client de test) avant n'importe quel utilisateur — sans attendre la promotion progressive normale, et sans risquer d'exposer le reste du trafic. Combiné à l'`AnalysisTemplate` de l'étape 7 : le header permettrait à un humain de valider fonctionnellement le canary en parallèle de la validation automatique par métriques — les deux mécanismes sont indépendants et complémentaires, pas concurrents (l'un valide "ça marche pour un cas d'usage réel", l'autre "ça ne dégrade pas les métriques globales").
+
+Note de rigueur : la vérification côté Prometheus (`rollouts_pod_template_hash` sur `http_requests_total`) n'a pas immédiatement reflété le trafic canary dans cette session — le pod canary venait d'être créé et la découverte de cible par Prometheus (cycle de scrape ~30s-1min) n'avait pas encore rattrapé son retard au moment du test. La preuve retenue est donc directement les logs d'accès `ingress-nginx`, plus fiable et immédiate pour ce cas précis (confirmation au niveau réseau, pas au niveau métriques agrégées).
+
+---
