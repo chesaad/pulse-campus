@@ -252,6 +252,8 @@ Piège rencontré et corrigé : après la migration, l'ancien `Deployment/annuai
 
 Second piège, non documenté dans le poly : après la migration, l'Application `annuaire-dev` restait perpétuellement `OutOfSync` malgré un état fonctionnellement identique. Diagnostiqué avec `argocd app manifests --core --source=git` vs `--source=live` : l'API Kubernetes défaultait silencieusement `protocol: TCP` sur le port du conteneur côté live. ArgoCD normalise ce genre de default connu pour les types natifs (`Deployment`), mais pas pour un champ de forme `PodSpec` imbriqué dans une CRD (`Rollout`). Corrigé en déclarant `protocol: TCP` explicitement dans `rollout.yaml` — plus généralement, une leçon pour la suite du TP : sur une CRD, il faut s'attendre à devoir déclarer explicitement des champs qu'on omettrait sans risque sur une ressource native.
 
+Troisième piège, celui-là documenté dans la doc officielle Argo Rollouts (intégration ArgoCD) mais absent du poly : après le premier canary réel, `Service/annuaire` et `Service/annuaire-canary` sont repassés `OutOfSync`. Cause : le contrôleur Argo Rollouts patche dynamiquement `spec.selector` de ces deux Services pour y injecter le label `rollouts-pod-template-hash` du ReplicaSet courant (stable ou canary) — un champ que le chart Helm ne peut pas connaître à l'avance puisqu'il dépend du hash calculé à l'exécution. Corrigé en ajoutant `ignoreDifferences` sur `spec.selector` des `Service` dans les Applications `annuaire-dev` et `planning-dev` (celle-ci par anticipation de l'étape 8, blueGreen ayant le même effet sur `activeService`/`previewService`).
+
 Validation : dashboard `rollouts.devhub.local` (Argo Rollouts) affiche le Rollout ; canary observé de bout en bout par `--watch`, capture ci-dessus.
 
 ---
