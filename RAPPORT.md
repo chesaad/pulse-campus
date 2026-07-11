@@ -254,6 +254,69 @@ Second piège, non documenté dans le poly : après la migration, l'Application 
 
 Troisième piège, celui-là documenté dans la doc officielle Argo Rollouts (intégration ArgoCD) mais absent du poly : après le premier canary réel, `Service/annuaire` et `Service/annuaire-canary` sont repassés `OutOfSync`. Cause : le contrôleur Argo Rollouts patche dynamiquement `spec.selector` de ces deux Services pour y injecter le label `rollouts-pod-template-hash` du ReplicaSet courant (stable ou canary) — un champ que le chart Helm ne peut pas connaître à l'avance puisqu'il dépend du hash calculé à l'exécution. Corrigé en ajoutant `ignoreDifferences` sur `spec.selector` des `Service` dans les Applications `annuaire-dev` et `planning-dev` (celle-ci par anticipation de l'étape 8, blueGreen ayant le même effet sur `activeService`/`previewService`).
 
+---
+
+## Étape 6 — Pilotage canary manuel
+
+`steps` transformés en vraie séquence avec pause manuelle indéfinie :
+
+```yaml
+steps:
+  - setWeight: 10
+  - pause: {}                    # durée indéfinie
+  - setWeight: 50
+  - pause: { duration: 1m }
+  - setWeight: 100
+```
+
+Trois scénarios déclenchés en poussant un nouveau tag d'image (`demo-scenarioN`) à chaque fois, pour rester dans le flux GitOps (aucun `kubectl edit`).
+
+**Scénario 1 — promotion normale.**
+
+```
+$ kubectl argo rollouts get rollout annuaire -n devhub-dev
+Status: ॥ Paused   Step: 1/5   SetWeight: 10   ActualWeight: 10
+
+$ kubectl argo rollouts promote annuaire -n devhub-dev
+rollout 'annuaire' promoted
+Status: ॥ Paused   Step: 3/5   SetWeight: 50   ActualWeight: 50   # saute directement au palier suivant
+
+# 1 minute plus tard, sans intervention :
+Status: ✔ Healthy   Step: 5/5   SetWeight: 100   ActualWeight: 100
+```
+
+**Scénario 2 — annulation explicite (canary OK mais on décide d'abort).**
+
+```
+$ kubectl argo rollouts abort annuaire -n devhub-dev
+rollout 'annuaire' aborted
+Status: ✖ Degraded   Message: RolloutAborted: Rollout aborted update to revision 4
+Step: 0/5   SetWeight: 0   ActualWeight: 0
+Images: demo-scenario1 (stable), demo-scenario2 (canary)   # l'ancien ReplicaSet a repris tout le trafic
+```
+
+Confirmé : `abort` ramène le poids à 0 dans le cluster **mais ne modifie pas Git** (values-dev.yaml pointe toujours vers `demo-scenario2`) — drift immédiat entre Git et le cluster. `git revert HEAD` exécuté pour réaligner Git sur l'état réel du cluster (`image.tag: demo-scenario1`), commité et poussé ; `annuaire-dev` repasse `Synced`/`Healthy` dans la foulée.
+
+**Scénario 3 — promotion forcée sans inspection (`promote --full`).**
+
+```
+$ kubectl argo rollouts get rollout annuaire -n devhub-dev
+Status: ॥ Paused   Step: 1/5   SetWeight: 10
+
+$ kubectl argo rollouts promote annuaire -n devhub-dev --full
+rollout 'annuaire' fully promoted
+Status: ◌ Progressing   Step: 5/5   SetWeight: 100   # saute directement de 10% à 100%, sans passer par 50%
+
+# quelques secondes plus tard :
+Status: ✔ Healthy   Step: 5/5
+```
+
+**Dans quels cas un `promote --full` est-il acceptable en production ? Quelles précautions prendre ?**
+
+`promote --full` court-circuite *toutes* les analyses et pauses restantes — c'est l'équivalent d'un `RollingUpdate` natif déguisé en Rollout : toute la protection de la livraison progressive disparaît d'un coup. Acceptable seulement dans un cas précis : une **vraie urgence** où le correctif du canary est plus sûr que de continuer à servir la version stable actuelle (ex. faille de sécurité active corrigée par le canary, incident stable en cours dont le canary est le fix) — situation où le risque de "sauter les paliers" est objectivement inférieur au risque de laisser tourner la version en place. Précautions : (1) ne jamais l'utiliser en routine, seulement en astreinte documentée ; (2) avoir vérifié au minimum les logs/dashboards du canary avant de trancher, même sans attendre l'`AnalysisTemplate` complet ; (3) tracer la décision (qui, quand, pourquoi) ailleurs que dans l'historique Git (le message de commit `image.tag` ne porte pas cette justification) — un ticket d'incident ou une note dans le canal d'astreinte ; (4) revenir en mode normal (steps complets) dès l'incident clos, ne pas laisser la pratique s'installer.
+
+Validation : les trois scénarios pilotés en moins de cinq commandes chacun (`get`, `promote`/`abort`[/`--full`], plus `git revert` pour le scénario 2), depuis le terminal, sans passer par le dashboard (bien que celui-ci reflète les mêmes transitions en temps réel sur `rollouts.devhub.local`).
+
 Validation : dashboard `rollouts.devhub.local` (Argo Rollouts) affiche le Rollout ; canary observé de bout en bout par `--watch`, capture ci-dessus.
 
 ---
