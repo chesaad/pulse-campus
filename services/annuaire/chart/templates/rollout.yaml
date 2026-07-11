@@ -1,12 +1,12 @@
 {{- /*
-  Deployment de SECOURS — pour bootstrapper le service tant que le Rollout
-  n'est pas écrit (étapes 0 à 4 du TP).
-  En étape 5 vous écrirez rollout.yaml ET passerez `useDeployment: false`
-  dans values.yaml. Le Deployment cessera alors d'être rendu.
+  Rollout Argo Rollouts — remplace le Deployment (étape 5 du poly).
+  Stratégie canary minimaliste : 3 étapes simples, pas encore d'Analysis
+  (étape 7). Le traffic routing passe par ingress-nginx (trafficRouting.nginx),
+  qui fait un vrai split au niveau requêtes, pas une simple approximation par
+  ratio de replicas.
 */ -}}
-{{- if .Values.useDeployment }}
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: {{ include "annuaire.fullname" . }}
   labels:
@@ -44,6 +44,8 @@ spec:
               value: {{ .Chart.AppVersion | quote }}
             - name: COMMIT
               value: {{ .Values.image.tag | quote }}
+            - name: FAIL_RATE
+              value: {{ .Values.env.FAIL_RATE | default "0" | quote }}
           readinessProbe:
             httpGet:
               path: {{ .Values.probes.readiness.path }}
@@ -63,4 +65,16 @@ spec:
             allowPrivilegeEscalation: {{ .Values.securityContext.allowPrivilegeEscalation }}
             capabilities:
               {{- toYaml .Values.securityContext.capabilities | nindent 14 }}
-{{- end }}
+  strategy:
+    canary:
+      stableService: {{ include "annuaire.fullname" . }}
+      canaryService: {{ include "annuaire.fullname" . }}-canary
+      trafficRouting:
+        nginx:
+          stableIngress: {{ include "annuaire.fullname" . }}
+      steps:
+        - setWeight: 20
+        - pause: { duration: 30s }
+        - setWeight: 50
+        - pause: { duration: 30s }
+        - setWeight: 100

@@ -27,6 +27,10 @@ ingress:
 
 env:
   LOG_LEVEL: info
+  # Flag utilisé par l'endpoint /break pour injecter des 500 sur un
+  # pourcentage de requêtes — sert à provoquer un échec de canary (étape 7).
+  # Laissé à 0 par défaut, changé ponctuellement en values-dev.yaml + commit.
+  FAIL_RATE: "0"
 
 # Métriques Prometheus — paramètres injectés au pod via variables d'environnement.
 # SLO p95 < 300ms (étape 1) : le défaut a déjà un bucket exact à 0.3, conservé tel quel.
@@ -41,10 +45,6 @@ monitoring:
     interval: 30s
     # Doit correspondre au releaseName du chart kube-prometheus-stack.
     release: kps
-
-# Tant que le Rollout n'est pas écrit (étape 5), le chart garde un Deployment
-# de secours pour démarrer. Passez à false dès que rollout.yaml est en place.
-useDeployment: true
 
 resources:
   requests:

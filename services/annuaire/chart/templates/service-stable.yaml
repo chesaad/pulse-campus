@@ -1,7 +1,8 @@
 {{- /*
-  Service unique fourni pour démarrer.
-  En étape 5 vous écrirez DEUX services supplémentaires : service-stable.yaml
-  et service-canary.yaml, référencés par le Rollout pour le traffic split.
+  Service "stable" — étape 5. Même nom qu'avant la migration Rollout (donc
+  l'Ingress existant n'a rien à changer), sélecteur de base identique ; c'est
+  Argo Rollouts qui patchera dynamiquement ce Service pour n'inclure que le
+  ReplicaSet stable (ajout runtime du label rollouts-pod-template-hash).
   Le label `release` est requis pour que le ServiceMonitor du
   kube-prometheus-stack le découvre (cf. étape 4).
 */ -}}

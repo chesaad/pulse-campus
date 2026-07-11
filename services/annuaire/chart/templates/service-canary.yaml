@@ -1,0 +1,23 @@
+{{- /*
+  Service "canary" — étape 5. Sélecteur de base identique au stable ; Argo
+  Rollouts le patche dynamiquement pour ne pointer que sur le ReplicaSet
+  canary pendant une promotion. Sans label `release` distinct : Prometheus
+  scrape via le ServiceMonitor posé sur le Service stable, le label
+  `rollouts-pod-template-hash` (étape 7) suffit à distinguer canary/stable
+  dans les requêtes PromQL de l'AnalysisTemplate.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "annuaire.fullname" . }}-canary
+  labels:
+    {{- include "annuaire.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "annuaire.selectorLabels" . | nindent 4 }}
