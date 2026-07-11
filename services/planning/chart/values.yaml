@@ -1,6 +1,8 @@
 # Values par défaut du chart planning.
 # Surchargées par values-dev.yaml selon l'environnement.
 
+fullnameOverride: planning
+
 image:
   repository: ghcr.io/chesaad/planning
   tag: dev

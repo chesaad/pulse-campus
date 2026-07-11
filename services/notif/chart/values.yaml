@@ -1,5 +1,7 @@
 # Values par défaut du chart notif.
 
+fullnameOverride: notif
+
 image:
   repository: ghcr.io/chesaad/notif
   tag: dev

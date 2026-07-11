@@ -6,8 +6,18 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+  fullnameOverride figé à "annuaire" dans values.yaml : le nom du Service (et
+  donc le label Prometheus `service=`) reste stable quel que soit le nom de
+  release ArgoCD (ex. "annuaire-dev"), pour que le PromQL service="annuaire"
+  fonctionne pareil dans tous les environnements.
+*/ -}}
 {{- define "annuaire.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
 {{- printf "%s-%s" .Release.Name (include "annuaire.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "annuaire.labels" -}}

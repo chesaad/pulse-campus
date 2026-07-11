@@ -1,6 +1,12 @@
 # Values par défaut du chart annuaire.
 # Surchargées par values-dev.yaml selon l'environnement.
 
+# Nom de Service stable, indépendant du nom de release ArgoCD (ex.
+# "annuaire-dev") — nécessaire pour que le label Prometheus `service=`
+# généré par le ServiceMonitor soit identique dans tous les environnements
+# et que le PromQL service="annuaire" (étapes 1, 4, 7...) reste correct.
+fullnameOverride: annuaire
+
 image:
   repository: ghcr.io/chesaad/annuaire
   tag: dev

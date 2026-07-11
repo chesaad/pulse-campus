@@ -6,8 +6,17 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+  fullnameOverride figé à "planning" dans values.yaml : le nom du Service (et
+  donc le label Prometheus `service=`) reste stable quel que soit le nom de
+  release ArgoCD (ex. "planning-dev").
+*/ -}}
 {{- define "planning.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
 {{- printf "%s-%s" .Release.Name (include "planning.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "planning.labels" -}}
