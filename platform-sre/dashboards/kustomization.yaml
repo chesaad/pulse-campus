@@ -1,0 +1,34 @@
+# Enveloppe chaque dashboard JSON de ce dossier dans un ConfigMap portant le
+# label grafana_dashboard=1, découvert automatiquement par le sidecar de
+# Grafana (kube-prometheus-stack-values.yaml : grafana.sidecar.dashboards).
+#
+# Les fichiers *.json eux-mêmes restent la source de vérité "exportée depuis
+# l'UI Grafana" (étape 4 du poly) — cette kustomization ne fait qu'un
+# wrapping mécanique pour que Grafana les découvre.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+configMapGenerator:
+  - name: dashboard-annuaire
+    files:
+      - annuaire.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+      disableNameSuffixHash: true
+  - name: dashboard-planning
+    files:
+      - planning.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+      disableNameSuffixHash: true
+  - name: dashboard-notif
+    files:
+      - notif.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+      disableNameSuffixHash: true

@@ -1,0 +1,34 @@
+# Application ArgoCD : dashboards Grafana (étape 4 du poly)
+#
+# Déploie les 3 dashboards (annuaire, planning, notif) sous forme de
+# ConfigMaps labellisés grafana_dashboard=1, découverts automatiquement par
+# le sidecar de Grafana (kube-prometheus-stack-values.yaml). Les fichiers
+# platform-sre/dashboards/<service>.json restent la source de vérité,
+# exportée depuis l'UI Grafana ; ce Kustomize ne fait qu'un wrapping en
+# ConfigMap.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dashboards
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: devhub
+
+  source:
+    repoURL: https://github.com/chesaad/pulse-campus.git
+    targetRevision: main
+    path: platform-sre/dashboards
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
