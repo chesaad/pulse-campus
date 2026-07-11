@@ -43,8 +43,13 @@ spec:
       provider:
         prometheus:
           address: http://prometheus-operated.monitoring.svc.cluster.local:9090
+          # "OR on() vector(0)" : tant qu'aucune 5xx n'a jamais été vue, cette
+          # combinaison de labels n'existe pas du tout dans Prometheus (pas
+          # "0", vraiment absente) — sans ce filet, le fournisseur Prometheus
+          # d'Argo Rollouts plante sur un résultat vide ("reflect: slice
+          # index out of range") au lieu de lire un taux d'erreur de 0.
           query: |
-            sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}", status_class="5xx"}[2m]))
+            (sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}", status_class="5xx"}[2m])) OR on() vector(0))
             /
             sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m]))
 
@@ -64,4 +69,4 @@ spec:
             histogram_quantile(
               0.95,
               sum(rate(http_request_duration_seconds_bucket{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m])) by (le)
-            )
+            ) OR on() vector(0)
