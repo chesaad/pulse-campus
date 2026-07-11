@@ -6,7 +6,7 @@
 # automatisé changerait pour déclencher un déploiement (poly, "La promesse de
 # cette chaîne", étape 1).
 image:
-  tag: demo-analysis-ok-v3
+  tag: demo-header-routing
 
 ingress:
   enabled: true
