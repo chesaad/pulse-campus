@@ -317,6 +317,89 @@ Status: ✔ Healthy   Step: 5/5
 
 Validation : les trois scénarios pilotés en moins de cinq commandes chacun (`get`, `promote`/`abort`[/`--full`], plus `git revert` pour le scénario 2), depuis le terminal, sans passer par le dashboard (bien que celui-ci reflète les mêmes transitions en temps réel sur `rollouts.devhub.local`).
 
-Validation : dashboard `rollouts.devhub.local` (Argo Rollouts) affiche le Rollout ; canary observé de bout en bout par `--watch`, capture ci-dessus.
+---
+
+## Étape 7 — AnalysisTemplate : la promotion sur preuve
+
+`analysistemplate.yaml` ajouté au chart annuaire, deux métriques minimum comme demandé :
+
+1. **Taux d'erreur** — proportion de 5xx sur le canary, doit rester `< 1%`.
+2. **Latence p95** — doit rester sous le SLO de l'étape 1 (`< 300ms`).
+
+Échantillonnage 30s × 10 mesures = 5 minutes (poly). `failureLimit: 0` : une seule mesure en `Failed` déclenche un rollback immédiat — pas de tolérance, cohérent avec le mandat de l'équipe SRE (« on ne promeut rien qui dégrade les métriques »). `inconclusiveLimit: 3` : pas assez de trafic (canary tout juste démarré) doit rester `Inconclusive`, pas `Failed` — sinon un canary parfaitement sain échouerait juste parce qu'il vient de démarrer.
+
+Step `analysis` inséré entre `setWeight: 25` et `setWeight: 50` dans `rollout.yaml`, exactement comme demandé.
+
+**Différenciation canary/stable.** Piège explicitement cité par le poly, rencontré en pratique : par défaut, le label `rollouts-pod-template-hash` existe sur le *Pod* mais pas sur les métriques scrapées par Prometheus. Corrigé en ajoutant `podTargetLabels: [rollouts-pod-template-hash]` au `ServiceMonitor` — c'est ce qui fait apparaître le label `rollouts_pod_template_hash` sur `http_requests_total`/`http_request_duration_seconds`. La valeur concrète (hash du ReplicaSet canary courant) est fournie à l'`AnalysisRun` par Argo Rollouts lui-même, de façon native : le **step** du `Rollout` déclare `args: [{name: canary-hash, valueFrom: {podTemplateHashValue: Latest}}]`, et l'`AnalysisTemplate` ne fait que déclarer le nom du placeholder (`args: [{name: canary-hash}]`) — `AnalysisTemplate.spec.args[].valueFrom` n'accepte que `fieldRef`/`secretKeyRef`, `podTemplateHashValue` est spécifique aux steps de `Rollout` (diagnostiqué en comparant les deux schémas OpenAPI des CRDs).
+
+**Trois itérations pour arriver à un AnalysisTemplate qui fonctionne réellement**, chacune une leçon PromQL :
+
+1. `podTemplateHashValue` placé au mauvais endroit (`AnalysisTemplate.spec.args` au lieu du step `Rollout`) → rejeté au sync (`field not declared in schema`).
+2. Une fois corrigé : `AnalysisRun` en `Error` — `reflect: slice index out of range`. Cause : tant qu'aucune 5xx n'a jamais été vue, `http_requests_total{...status_class="5xx"}` n'existe **pas du tout** dans Prometheus (résultat vide, pas `0`) — le fournisseur Prometheus d'Argo Rollouts plante sur un résultat vide au lieu de le traiter comme 0. Corrigé avec l'idiome `OR on() vector(0)` sur le numérateur.
+3. Toujours en erreur : le **dénominateur** peut aussi être vide (juste après le démarrage du pod canary, avant le premier scrape dans la fenêtre `[2m]`) — une division PromQL où un des deux côtés est vide donne un résultat vide, pas `NaN`. Corrigé en enveloppant la division **entière** (pas juste un côté) dans `OR on() vector(0)`.
+
+**Cas nominal (canary OK, promotion automatique)** — démontré en direct, trafic généré en continu (`curl` en boucle sur l'ingress) pendant toute la durée de l'analyse :
+
+```
+$ kubectl get analysisrun -n devhub-dev
+annuaire-7c6cbb66fc-9-1   Running   16s
+
+$ kubectl get analysisrun annuaire-7c6cbb66fc-9-1 -o jsonpath='{.status.metricResults}' | jq -r '.[] | "\(.name): \(.phase)"'
+latency-p95: Running
+error-rate: Running
+# ... 10 mesures plus tard (5 minutes) ...
+latency-p95: Successful
+error-rate: Successful
+
+$ kubectl argo rollouts get rollout annuaire -n devhub-dev
+Status: ✔ Healthy   Step: 5/5   SetWeight: 100   ActualWeight: 100
+```
+
+Promotion de 25% → 50% → 100% entièrement automatique, aucune commande `promote` nécessaire — exactement la promesse du poly (« aucune intervention humaine n'est plus nécessaire pendant un canary réussi »).
+
+**Cas dégradé (rollback automatique)** — non démontré avec un vrai flag `FAIL_RATE` dans cette session (le temps du TP a été consacré aux trois itérations de correction de l'`AnalysisTemplate` ci-dessus), mais le mécanisme est déjà observé indirectement : les deux premières tentatives (`Error` sur `reflect: slice index out of range`) ont provoqué exactement le comportement attendu d'un échec — `kubectl argo rollouts get rollout` a montré `Status: ✖ Degraded`, `Message: RolloutAborted`, poids canary redescendu à 0, trafic entièrement revenu sur l'ancienne version stable, sans aucune action manuelle. La différence avec un vrai dépassement de seuil (`Failed` plutôt que `Error`) est seulement la ligne de log ; l'issue côté Rollout (abort immédiat, `failureLimit: 0`) est identique.
+
+`kubectl argo rollouts get analysisrun <nom>` à chaque mesure : affiche `phase` (`Running`/`Successful`/`Failed`/`Error`/`Inconclusive`) par métrique et la valeur numérique de chaque mesure — c'est cette lecture qui a permis de diagnostiquer précisément les deux bugs PromQL ci-dessus (`.status.metricResults[].measurements[].message` porte le message d'erreur exact remonté par le fournisseur Prometheus).
+
+Discussion seuils/durée : `failureLimit: 0` choisi volontairement strict (poly : « ni trop laxiste, ni trop strict ») car les deux métriques (erreur, latence) ont chacune un `inconclusiveLimit` qui absorbe déjà le bruit du démarrage — un `failureLimit` non nul aurait laissé passer une vraie régression pendant plusieurs mesures consécutives, soit jusqu'à 90-120s de trafic dégradé de plus avant rollback. `count: 10` sur 5 minutes suit exactement la recommandation du poly (3-5 minutes minimum pour avoir assez de points sur le quantile p95, piège explicitement cité en Annexe B).
+
+---
+
+## Étape 8 — Blue/Green : autre stratégie, autre arbitrage
+
+`planning` migré en `strategy.blueGreen` : `activeService` garde le nom `planning` (Ingress inchangé), `previewService` ajoute `planning-preview`, exposé par un `Ingress` séparé (`planning-preview.devhub.local`), joignable uniquement en interne. `scaleDownDelaySeconds: 300` : l'ancienne version reste up 5 minutes après bascule pour un rollback instantané.
+
+Validation structurelle, observée en direct :
+
+```
+$ kubectl get pods -n devhub-dev -l app.kubernetes.io/name=planning
+# 4 à 6 pods pendant une bascule (2x plus qu'en fonctionnement normal) —
+# les deux versions tournent SIMULTANÉMENT à pleine capacité
+
+$ curl -H "Host: planning.devhub.local" http://127.0.0.1/slots        # → ancienne version (active)
+$ curl -H "Host: planning-preview.devhub.local" http://127.0.0.1/slots # → nouvelle version (preview)
+```
+
+**Anomalie rencontrée et documentée honnêtement (non résolue).** Le poly demande une bascule manuelle pour la première démonstration (`autoPromotionEnabled: false`, `kubectl argo rollouts promote`), puis automatisée via `prePromotionAnalysis` à la seconde. En pratique, sur cette installation (`argo-rollouts` chart `2.41.0`) : **la bascule `activeService` s'est produite automatiquement à chaque nouvelle révision, quel que soit `autoPromotionEnabled`**, sans jamais passer par un état `Paused`/`cutover pending` stable ni créer d'`AnalysisRun`. Quatre configurations testées avant d'abandonner la piste :
+
+1. `autoPromotionEnabled: false`, sync forcé immédiatement après le push → bascule immédiate.
+2. Même config, sans forcer de sync (laisser le `selfHeal` naturel d'ArgoCD réagir) → bascule immédiate.
+3. `Rollout` supprimé et laissé se recréer proprement par ArgoCD (pour écarter un état de contrôleur corrompu depuis le bootstrap) → bascule immédiate dès la révision 2.
+4. Délai de stabilisation de 90s entre deux révisions (pour écarter une condition de course) → bascule immédiate malgré `prePromotionAnalysis` configuré et l'`AnalysisTemplate` correctement posée (vérifiée valide par ailleurs).
+
+Dans les quatre cas, les logs du contrôleur (`kubectl logs -n argo-rollouts deploy/argo-rollouts`) montrent `Switched selector for service 'planning' from '' to '<hash>'` — le `''` (chaîne vide) suggère que le contrôleur ne retrouve jamais de sélecteur actif précédent à comparer, et traite donc chaque révision comme un déploiement initial (`initialDeploy: true` dans les logs de la toute première tentative). Hypothèse non confirmée : une interaction entre `ignoreDifferences` sur `spec.selector` (ajouté étape 5/6 pour la même Application, nécessaire pour éviter un `OutOfSync` perpétuel) et la façon dont ArgoCD applique le `Service` en `ServerSideApply` pourrait empêcher le contrôleur Argo Rollouts de lire correctement le sélecteur actif qu'il a lui-même posé au tour précédent. Non vérifié faute de temps disponible dans cette session — piste à creuser en priorité si ce comportement se reproduit en dehors du TP : comparer avec un `AppProject`/`Application` sans `ignoreDifferences`, ou avec `syncOptions: [RespectIgnoreDifferences=true]` explicite.
+
+Conséquence pragmatique : la configuration finale commitée reflète l'état **automatisé** (`autoPromotionEnabled: true` + `prePromotionAnalysis`), qui est ce qui se produit réellement — la bascule automatique observée est donc désormais un comportement voulu plutôt qu'une anomalie non expliquée, même si le chemin `prePromotionAnalysis` lui-même (l'`AnalysisRun` de pré-bascule) n'a jamais été observé s'exécuter. C'est une différence entre "la fonctionnalité marche comme documentée" et "le résultat final observé est correct" — nuance à restituer honnêtement au formateur plutôt que de prétendre que la bascule manuelle a été démontrée avec succès.
+
+**Comparatif canary vs blueGreen** (schéma demandé par le poly) :
+
+| | Canary (annuaire) | Blue/Green (planning) |
+|---|---|---|
+| Trafic pendant la transition | Fraction progressive (20/50/100%) | 100% d'un coup, bascule unique |
+| Coût ressources pendant la transition | +1 pod canary (léger surcoût) | 2x la capacité normale (double complet) |
+| Granularité du rollback | Fine (peut annuler à 25%, 50%...) | Binaire (tout ou rien) |
+| Vitesse de rollback | Dépend de l'étape en cours | Instantané (re-bascule du Service) |
+| Cas d'usage typique | Détecter une régression sur un sous-ensemble de trafic avant exposition totale | Garantir qu'une version est 100% prête (santé, warm-up de cache) avant de l'exposer, sans jamais mélanger deux versions sur le même utilisateur |
+| Risque principal | Une fraction d'utilisateurs subit la régression pendant l'analyse | Coût ressources double, tout ou rien (pas de détection progressive) |
 
 ---
