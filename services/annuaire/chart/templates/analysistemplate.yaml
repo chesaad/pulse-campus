@@ -1,0 +1,65 @@
+{{- /*
+  AnalysisTemplate — étape 7. Interroge Prometheus pendant la promotion pour
+  décider automatiquement de promouvoir ou de rollback, sans intervention
+  humaine si le canary est sain.
+
+  Deux métriques minimum (poly) :
+    1. Taux d'erreur — proportion de 5xx sur le canary, doit rester < 1%.
+    2. Latence p95   — doit rester sous le SLO de l'étape 1 (300ms pour annuaire).
+
+  Différenciation canary/stable : label rollouts-pod-template-hash, injecté
+  dans les métriques via podTargetLabels sur le ServiceMonitor, et fourni à
+  l'AnalysisRun par Argo Rollouts lui-même via valueFrom.podTemplateHashValue
+  (mécanisme natif, pas de bricolage).
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "annuaire.fullname" . }}-canary-analysis
+  labels:
+    {{- include "annuaire.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: canary-hash
+      valueFrom:
+        podTemplateHashValue: Latest
+
+  metrics:
+    - name: error-rate
+      # 30s x 10 mesures = 5 minutes d'observation (poly, étape 7).
+      interval: 30s
+      count: 10
+      # Une seule mesure en Failed déclenche immédiatement un rollback —
+      # pas de tolérance, cohérent avec "on ne promeut rien qui dégrade
+      # les métriques" (mandat de l'équipe SRE, avant-propos du poly).
+      failureLimit: 0
+      # Pas assez de trafic (canary tout juste démarré) -> Inconclusive,
+      # pas Failed : on attend d'avoir un signal avant de juger.
+      inconclusiveLimit: 3
+      successCondition: result[0] < 0.01
+      failureCondition: result[0] >= 0.01
+      provider:
+        prometheus:
+          address: http://prometheus-operated.monitoring.svc.cluster.local:9090
+          query: |
+            sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}", status_class="5xx"}[2m]))
+            /
+            sum(rate(http_requests_total{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m]))
+
+    - name: latency-p95
+      interval: 30s
+      count: 10
+      failureLimit: 0
+      inconclusiveLimit: 3
+      # SLO p95 < 300ms (étape 1) — le canary doit rester sous le même seuil
+      # que la version stable, pas un seuil plus laxiste.
+      successCondition: result[0] < 0.3
+      failureCondition: result[0] >= 0.3
+      provider:
+        prometheus:
+          address: http://prometheus-operated.monitoring.svc.cluster.local:9090
+          query: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{service="annuaire", rollouts_pod_template_hash="{{ "{{args.canary-hash}}" }}"}[2m])) by (le)
+            )

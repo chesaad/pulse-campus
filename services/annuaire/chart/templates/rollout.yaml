@@ -73,11 +73,15 @@ spec:
       trafficRouting:
         nginx:
           stableIngress: {{ include "annuaire.fullname" . }}
-      # Étape 6 : pause manuelle (durée indéfinie) au premier palier, pour
-      # reprendre la main depuis le terminal/dashboard avant de continuer.
+      # Étape 7 : promotion sur preuve. Le step `analysis` interroge
+      # Prometheus pendant 5 minutes (2 métriques, cf. analysistemplate.yaml)
+      # avant d'autoriser la suite — plus d'intervention humaine nécessaire
+      # tant que le canary reste sous les seuils.
       steps:
-        - setWeight: 10
-        - pause: {}
+        - setWeight: 25
+        - analysis:
+            templates:
+              - templateName: {{ include "annuaire.fullname" . }}-canary-analysis
         - setWeight: 50
-        - pause: { duration: 1m }
+        - pause: { duration: 30s }
         - setWeight: 100
