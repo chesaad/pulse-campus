@@ -147,6 +147,10 @@ Piège du poly explicitement anticipé : le chart `kube-prometheus-stack` pose b
 
 Piège rencontré en pratique (non documenté dans le poly) : le chart pose par défaut un sous-composant `coreDns` qui crée un `Service` dans le namespace `kube-system` — refusé par notre `AppProject` (destinations volontairement restreintes à `argocd`/`devhub-*`/`monitoring`/`argo-rollouts`, pas `kube-system`). Corrigé en désactivant `coreDns.enabled: false`, pour la même raison que `kubeControllerManager`/`kubeScheduler`/`kubeEtcd`/`kubeProxy` (déjà désactivés dans le squelette) : kind n'expose pas ces endpoints de control-plane de la même façon qu'un vrai cluster managé, et on ne veut de toute façon pas qu'une Application gère des ressources hors de son périmètre.
 
+Second piège rencontré : le squelette suggérait `prometheusOperator.admissionWebhooks.enabled: false` + `patch.enabled: false` ("l'auto-patch peut bloquer sur kind"). Sur la version de chart réellement installée (87.15.1, bien plus récente que la `65.x` supposée par le poly), ce schéma a changé — désactiver purement les admission webhooks laisse le Deployment de l'operator monter un volume `Secret` `kps-admission` que plus rien ne crée, et le pod reste bloqué en `ContainerCreating` indéfiniment (`FailedMount ... secret "kps-admission" not found`). Corrigé en réactivant `enabled: true` + `patch.enabled: true` (le Job de patch génère lui-même un certificat auto-signé, pas besoin de cert-manager sur kind). Preuve que "figer une version de chart" (contrainte de l'étape 3) ne suffit pas — il faut aussi vérifier que les valeurs du poly/squelette correspondent bien au schéma de la version qu'on a réellement figée.
+
+Validation (`kubectl get pods -n monitoring`, `kubectl get pods -n argo-rollouts`) : tous les pods `Running`, les 7 Applications ArgoCD `Synced`/`Healthy` (`root`, `kube-prometheus-stack`, `argo-rollouts`, `dashboards`, `annuaire-dev`, `planning-dev`, `notif-dev`). `Status → Targets` dans Prometheus confirmé via l'API (`/api/v1/targets`) : `annuaire`, `planning`, `notif` et `argo-rollouts-metrics` tous `up`.
+
 ---
 
 ## Étape 4 — ServiceMonitor + dashboard Grafana par service
@@ -165,5 +169,27 @@ Dashboards (`platform-sre/dashboards/<service>.json`, un par service, gabarit co
 Nuance sur la réutilisabilité : les 3 premiers panneaux sont génériquement templatés par `$service`/`$namespace` grâce au contrat de labels commun (`http_requests_total`, `http_request_duration_seconds` identiques dans les 3 langages). Le panneau *Build info* ne l'est pas complètement : le nom de la métrique change par service (`annuaire_build_info` / `planning_build_info` / `notif_build_info`), donc une variable Grafana `constant` (`$build_info_metric`) fixe ce nom par dashboard exporté plutôt que de le rendre sélectionnable — un vrai dashboard unique inter-services nécessiterait soit une convention de nommage unique (`build_info{service=...}` sans préfixe), soit une `recording rule` qui uniformise le nom, ce qui n'a pas été fait ici pour rester fidèle à l'instrumentation fournie (« vous n'aurez jamais à la modifier »).
 
 Les dashboards sont commités en JSON pur (source de vérité "exportée") puis enveloppés en `ConfigMap` (label `grafana_dashboard: "1"`) via une petite Kustomization (`platform-sre/dashboards/kustomization.yaml`) déployée par une nouvelle Application ArgoCD `dashboards` — nécessaire car le sidecar de Grafana découvre des `ConfigMap`, pas des fichiers JSON bruts dans Git.
+
+Piège rencontré (le plus instructif du TP jusqu'ici, pas dans l'Annexe B du poly) : le `_helpers.tpl` fourni par le squelette calcule le nom du `Service`/`Deployment`/`ServiceMonitor` comme `{{ .Release.Name }}-{{ .Chart.Name }}`. Comme l'`Application` ArgoCD ne fixe pas de `releaseName` explicite, `.Release.Name` vaut le nom de l'Application (`annuaire-dev`), donc le label Prometheus `service=` valait en réalité `annuaire-dev-annuaire`, pas `annuaire`. Repéré en interrogeant Prometheus directement (`/api/v1/query?query=http_requests_total{namespace="devhub-dev"}`) et en lisant le label `service` retourné — tout le PromQL du rapport (étapes 1 et 4) aurait silencieusement retourné des séries vides en environnement réel. Corrigé en ajoutant le support standard de `fullnameOverride` dans les 3 `_helpers.tpl` (motif `helm create` classique) et en fixant `fullnameOverride: annuaire`/`planning`/`notif` dans chaque `values.yaml` — le nom de Service reste désormais stable quel que soit le nom de release, ce qui est aussi ce qui permettrait de faire tourner le même chart avec un `releaseName` différent en staging/prod sans casser les dashboards.
+
+Validation post-correction (Prometheus interrogé en direct après une salve de `curl` via l'ingress) :
+
+```
+$ curl -s --data-urlencode 'query=sum(rate(http_requests_total{namespace="devhub-dev"}[5m]))by(service)' \
+    http://localhost:9091/api/v1/query | jq -r '.data.result[] | "\(.metric.service): \(.value[1])"'
+annuaire: 0.62
+planning: 0.48
+notif: 0.46
+
+$ curl -s --data-urlencode 'query=histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="annuaire"}[5m])) by (le))' \
+    http://localhost:9091/api/v1/query | jq -r '.data.result[] | .value[1]'
+0.0475
+
+$ curl -s --data-urlencode 'query=sum(rate(http_requests_total{service="annuaire",status_class!~"5.."}[5m]))/sum(rate(http_requests_total{service="annuaire"}[5m]))' \
+    http://localhost:9091/api/v1/query | jq -r '.data.result[] | .value[1]'
+1
+```
+
+p95 à 47.5 ms (SLO à 300 ms) et disponibilité à 100 % sur du trafic sans erreur injectée — cohérent, sert de baseline "avant canary" pour les étapes suivantes.
 
 ---
